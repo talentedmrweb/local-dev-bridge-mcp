@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "local-dev-bridge": {
+      "command": "node",
+      "args": ["/absolute/path/to/local-dev-bridge-mcp/index.js"],
+      "env": {
+        "PROJECTS_DIR": "/Users/YOUR_USERNAME/Desktop/Projects"
+      }
+    }
+  }
+}
