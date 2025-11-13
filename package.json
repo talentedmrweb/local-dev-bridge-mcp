@@ -1,0 +1,27 @@
+{
+  "name": "local-dev-bridge-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for local development - bridges Claude Desktop with your local file system",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "development",
+    "local",
+    "file-system"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "glob": "^10.3.10",
+    "minimatch": "^9.0.3"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
