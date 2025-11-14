@@ -2,6 +2,10 @@
 
 A Model Context Protocol (MCP) server that provides Claude Desktop with direct access to your local file system for development tasks. This tool enables Claude to read, write, edit files, run commands, and search through your codebase.
 
+<a href="https://glama.ai/mcp/servers/@talentedmrweb/local-dev-bridge-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@talentedmrweb/local-dev-bridge-mcp/badge" alt="Local Dev Bridge MCP server" />
+</a>
+
 ## Features
 
 - 📖 **Read files** - View contents of any file in your project
