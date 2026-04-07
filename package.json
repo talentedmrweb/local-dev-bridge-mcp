@@ -1,7 +1,7 @@
 {
   "name": "local-dev-bridge-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for local development - bridges Claude Desktop with your local file system",
+  "version": "2.0.0",
+  "description": "MCP server bridging Claude Code and Claude in Chrome — local filesystem access plus a UAT test queue for cross-session browser testing",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -12,7 +12,12 @@
     "claude",
     "development",
     "local",
-    "file-system"
+    "file-system",
+    "uat",
+    "testing",
+    "browser",
+    "claude-code",
+    "claude-chrome"
   ],
   "author": "",
   "license": "MIT",

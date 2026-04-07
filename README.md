@@ -1,222 +1,171 @@
-# Local Dev Bridge MCP
+# Local Dev Bridge MCP v2.0
 
-A Model Context Protocol (MCP) server that provides Claude Desktop with direct access to your local file system for development tasks. This tool enables Claude to read, write, edit files, run commands, and search through your codebase.
+An MCP server that bridges Claude Code and Claude in Chrome. It gives any Claude session full local filesystem access **plus** a shared UAT test queue so Claude Code can author browser tests and Claude in Chrome can execute them.
 
-## Features
+## What's New in v2
 
-- 📖 **Read files** - View contents of any file in your project
-- ✏️ **Write files** - Create new files or overwrite existing ones
-- 🔧 **Edit files** - Make precise edits by replacing specific text
-- 📁 **Browse directories** - List contents of folders
-- 💻 **Run commands** - Execute shell commands (npm, git, tests, etc.)
-- 🔍 **Search files** - Search for text across your entire codebase
+The original filesystem tools (`read_file`, `write_file`, `edit_file`, `list_directory`, `run_command`, `search_files`) are all still here. v2 adds a **UAT queue system** — a simple file-based task queue that lets different Claude sessions coordinate browser testing without any external infrastructure.
 
-## Prerequisites
+### The Workflow
 
-- Node.js 16 or higher
-- npm or yarn
-- Claude Desktop application
-
-## Installation
-
-### Step 1: Clone the Repository
-
-```bash
-git clone https://github.com/YOUR_USERNAME/local-dev-bridge-mcp.git
-cd local-dev-bridge-mcp
+```
+┌──────────────┐         uat-queue/          ┌────────────────────┐
+│  Claude Code │ ──queue_test──► pending/  ──►│  Claude in Chrome  │
+│  (writes     │                              │  (or Cowork with   │
+│   code)      │ ◄──get_results── results/ ◄──│   Chrome attached) │
+└──────────────┘                              └────────────────────┘
 ```
 
-### Step 2: Install Dependencies
+1. **Claude Code** finishes a code change and queues a UAT test via `uat_queue_test`
+2. **Claude in Chrome** (or Cowork) calls `uat_get_pending` → `uat_claim_test` → executes in the browser → `uat_complete_test`
+3. **Claude Code** checks results with `uat_get_results` or `uat_dashboard`
+
+## Setup
 
 ```bash
+cd local-dev-bridge-mcp
 npm install
 ```
 
-### Step 3: Configure Claude Desktop
+### Claude Desktop / Cowork Config
 
-1. Open Claude Desktop settings
-2. Navigate to the "Developer" section
-3. Find the MCP configuration file location:
-   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-   - **Linux**: `~/.config/Claude/claude_desktop_config.json`
-
-4. Edit the configuration file and add the local-dev-bridge server:
+Add to your Claude config (`claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "local-dev-bridge": {
       "command": "node",
-      "args": ["/absolute/path/to/local-dev-bridge-mcp/index.js"],
+      "args": ["/path/to/local-dev-bridge-mcp/index.js"],
       "env": {
-        "PROJECTS_DIR": "/Users/YOUR_USERNAME/Desktop/Projects"
+        "PROJECTS_DIR": "/Users/you/Desktop/Projects",
+        "UAT_DIR": "/Users/you/Desktop/Projects/uat-queue"
       }
     }
   }
 }
 ```
 
-**Important:** Replace the following:
-- `/absolute/path/to/local-dev-bridge-mcp/index.js` with the actual path to where you cloned this repository
-- `/Users/YOUR_USERNAME/Desktop/Projects` with the path to your projects directory
+### Claude Code Config
 
-### Step 4: Restart Claude Desktop
+Same MCP server, same config. Both sessions point at the same filesystem and queue directory — that's the whole trick.
 
-After saving the configuration file, completely quit and restart Claude Desktop for the changes to take effect.
+### Environment Variables
 
-## Configuration
+| Variable | Default | Description |
+|---|---|---|
+| `PROJECTS_DIR` | `~/Desktop/Projects` | Base directory for file operations |
+| `UAT_DIR` | `$PROJECTS_DIR/uat-queue` | Where the UAT queue lives |
 
-### Setting the Projects Directory
+## Tools
 
-The MCP server uses a base directory for all file operations. By default, it uses `~/Desktop/Projects`. You can customize this by setting the `PROJECTS_DIR` environment variable in the Claude configuration:
+### Filesystem Tools (Original)
+
+| Tool | Description |
+|---|---|
+| `read_file` | Read file contents |
+| `write_file` | Create or overwrite a file |
+| `edit_file` | Find-and-replace within a file |
+| `list_directory` | List directory contents |
+| `run_command` | Execute a shell command |
+| `search_files` | Recursive text search |
+
+### UAT Queue Tools (New in v2)
+
+| Tool | Description |
+|---|---|
+| `uat_queue_test` | Queue a new test with steps, URL, priority, tags, and context |
+| `uat_get_pending` | List pending tests (filterable by tag/priority) |
+| `uat_get_test` | Read full test details by ID |
+| `uat_claim_test` | Claim a test for execution (moves to in-progress) |
+| `uat_complete_test` | Record results: pass/fail/blocked/skipped with per-step details |
+| `uat_get_results` | Retrieve results (filterable by status/date) |
+| `uat_reset_test` | Move a test back to pending for re-execution |
+| `uat_dashboard` | Overview of queue counts, priorities, and pass rates |
+
+## UAT Test Format
+
+Tests are stored as JSON (with a companion `.md` for human readability). Here's the schema:
 
 ```json
-"env": {
-  "PROJECTS_DIR": "/your/custom/path"
+{
+  "id": "login-flow-happy-path-a1b2c3d4",
+  "name": "Login flow happy path",
+  "url": "http://localhost:3000/login",
+  "priority": "high",
+  "tags": ["auth", "smoke"],
+  "context": "Just refactored the auth middleware — make sure login still works end to end",
+  "steps": [
+    {
+      "action": "type",
+      "target": "#email",
+      "value": "test@example.com",
+      "description": "Enter email address"
+    },
+    {
+      "action": "type",
+      "target": "#password",
+      "value": "testpassword123",
+      "description": "Enter password"
+    },
+    {
+      "action": "click",
+      "target": "button[type='submit']",
+      "description": "Click the login button"
+    },
+    {
+      "action": "assert_url",
+      "value": "/dashboard",
+      "description": "Verify redirect to dashboard"
+    },
+    {
+      "action": "assert_visible",
+      "target": ".welcome-message",
+      "description": "Verify welcome message is displayed"
+    }
+  ]
 }
 ```
 
-## Usage
+### Supported Actions
 
-Once installed, Claude will have access to the following tools:
+| Action | Description |
+|---|---|
+| `navigate` | Go to a URL |
+| `click` | Click an element |
+| `type` | Type text into an input |
+| `select` | Select a dropdown option |
+| `scroll` | Scroll the page or to an element |
+| `wait` | Wait for an element or a duration |
+| `assert_visible` | Verify an element is visible |
+| `assert_text` | Verify text content matches |
+| `assert_url` | Verify the current URL |
+| `screenshot` | Take a screenshot |
+| `custom` | Free-form instruction for the browser agent |
 
-### Read a File
-Ask Claude to read any file in your project:
-- "Read the package.json file"
-- "Show me the contents of src/index.js"
+## Queue Directory Structure
 
-### Write a File
-Create new files or replace existing ones:
-- "Create a new React component in src/components/Button.jsx"
-- "Write a README.md file"
-
-### Edit a File
-Make specific changes to existing files:
-- "Change the port number from 3000 to 8080 in server.js"
-- "Update the version in package.json to 2.0.0"
-
-### List Directory Contents
-Browse your project structure:
-- "What files are in the src folder?"
-- "List all directories in the project"
-
-### Run Commands
-Execute shell commands:
-- "Run npm install"
-- "Execute the test suite"
-- "Initialize a git repository"
-
-### Search Files
-Find text across your codebase:
-- "Search for 'TODO' in all JavaScript files"
-- "Find all occurrences of 'useState' in the project"
-
-## Security Considerations
-
-⚠️ **Important:** This tool provides Claude with direct access to your file system. Please note:
-
-1. **File System Access**: Claude can read, write, and execute commands in the configured directory
-2. **Scope Limitation**: Operations are limited to the `PROJECTS_DIR` path and its subdirectories
-3. **Command Execution**: Be cautious when allowing command execution capabilities
-4. **Sensitive Data**: Avoid using this in directories containing sensitive credentials or private keys
-
-## Troubleshooting
-
-### MCP Server Not Appearing in Claude
-
-1. Ensure the path in `claude_desktop_config.json` is absolute and correct
-2. Check that Node.js is installed and accessible from the command line
-3. Verify the configuration JSON is valid (no syntax errors)
-4. Completely quit and restart Claude Desktop (not just close the window)
-
-### Permission Errors
-
-- On macOS/Linux, ensure the script has execute permissions:
-  ```bash
-  chmod +x index.js
-  ```
-- Verify that Claude Desktop has permissions to access your projects directory
-
-### Server Connection Issues
-
-Check the Claude Desktop logs for error messages:
-- **macOS**: `~/Library/Logs/Claude/`
-- **Windows**: `%APPDATA%\Claude\Logs\`
-- **Linux**: `~/.config/Claude/Logs/`
-
-## Development
-
-### Running Locally for Testing
-
-You can test the MCP server standalone:
-
-```bash
-npm start
+```
+uat-queue/
+├── pending/          # Tests waiting to be run
+│   ├── test-id.json
+│   └── test-id.md
+├── in-progress/      # Tests currently being executed
+│   ├── test-id.json
+│   └── test-id.md
+├── results/          # Completed tests with outcomes
+│   ├── test-id.json
+│   └── test-id.md
+└── archive/          # (Manual) old results you want to keep but clear from active view
 ```
 
-This will start the server on stdio, which you can interact with for debugging.
+## Tips
 
-### Adding New Tools
-
-To add new tools, modify the `setupToolHandlers()` method in `index.js`:
-
-1. Add the tool definition in the `ListToolsRequestSchema` handler
-2. Implement the tool logic in the `CallToolRequestSchema` handler
-3. Create a corresponding method in the class
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+- **From Claude Code:** After making code changes, queue tests with `uat_queue_test`. Include `context` explaining what changed so the browser agent knows what to focus on.
+- **From Cowork/Chrome:** Call `uat_get_pending` to see the queue, `uat_claim_test` to lock one, then use Chrome tools to execute each step. Call `uat_complete_test` when done.
+- **Re-runs:** Use `uat_reset_test` to move a failed test back to pending for another attempt.
+- **Filtering:** Use `tags` and `priority` to organize test suites — run just `"smoke"` tests, or only `"critical"` priority items.
 
 ## License
 
 MIT
-
-## Support
-
-For issues and questions, please open an issue on GitHub.
-
----
-
-## Quick Start for Team Members
-
-### For macOS Users:
-
-```bash
-# 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/local-dev-bridge-mcp.git
-cd local-dev-bridge-mcp
-
-# 2. Install dependencies
-npm install
-
-# 3. Get the full path
-pwd  # Copy this path
-
-# 4. Edit Claude config
-open ~/Library/Application\ Support/Claude/claude_desktop_config.json
-
-# 5. Add the configuration (see Step 3 above)
-# 6. Restart Claude Desktop
-```
-
-### For Windows Users:
-
-```powershell
-# 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/local-dev-bridge-mcp.git
-cd local-dev-bridge-mcp
-
-# 2. Install dependencies
-npm install
-
-# 3. Get the full path
-pwd  # Copy this path
-
-# 4. Edit Claude config
-notepad $env:APPDATA\Claude\claude_desktop_config.json
-
-# 5. Add the configuration (see Step 3 above)
-# 6. Restart Claude Desktop
-```
