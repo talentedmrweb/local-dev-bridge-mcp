@@ -1,14 +1,24 @@
-# Local Dev Bridge MCP v2.0
+# Local Dev Bridge MCP v3
 
-A shared MCP server that bridges any combination of Claude Code, Claude Desktop (Cowork), and Claude in Chrome. It gives every Claude session access to a shared local filesystem **and** a UAT test queue so development sessions can author browser tests and browser sessions can execute them.
+A small MCP server that does the two things nothing else on the Mac does:
 
-Project-agnostic by design — configure `PROJECTS_DIR` and `UAT_DIR` per-developer and it works with any codebase.
+1. **Herdr control** — list, read, type into, and wait on [Herdr](https://herdr.dev) agent panes on this Mac.
+2. **UAT queue** — a file-based work queue where coding sessions author browser tests and browser sessions (Cowork + Claude in Chrome) claim, run, and report them.
 
-## What It Does
+It has **no file or shell tools** any more. See [Pairing model](#pairing-model).
 
-**Filesystem tools** — read, write, edit, search, list, and run commands against a shared project directory. Any Claude session (Code, Desktop, Chrome) can operate on the same files.
+## Pairing model
 
-**UAT queue** — a file-based task queue that lets a coding session write browser test specs and a browser session execute them. No database, no server, no polling. The queue is just a directory of JSON files.
+> **Native bridge for files and shell. This bridge for Herdr and UAT.**
+
+| Need | Claude Desktop / Cowork | Claude Code |
+|---|---|---|
+| Read / write / edit / search files | Native device bridge — **Add folder** (connect `~/Projects` or the one project folder) | Built-in `Read` / `Write` / `Edit` / `Grep` |
+| Run shell commands | Native device bridge (`device_bash`, runs in a Linux VM on the granted folders) | Built-in `Bash` (runs on the Mac) |
+| Drive Herdr panes | **this bridge** (`herdr_*`) — the native VM cannot reach the Herdr socket | **this bridge** or `herdr` CLI via `Bash` |
+| UAT queue | **this bridge** (`uat_*`) | **this bridge** (`uat_*`) |
+
+Why: the v2 file tools ran any command anywhere on the host as the operator, with no approval gate and absolute-path escape. The native bridge's per-folder grant is the right control for raw file/shell work.
 
 ## Setup
 
@@ -18,139 +28,145 @@ cd local-dev-bridge-mcp
 npm install
 ```
 
+Requires Node ≥ 18 and, for the Herdr tools, Herdr at `/opt/homebrew/bin/herdr` (Homebrew on Apple Silicon). The UAT tools work without Herdr.
+
 ### Configuration
 
-The MCP server takes two environment variables:
+One setting:
 
 | Variable | Default | Description |
 |---|---|---|
-| `PROJECTS_DIR` | `~/Desktop/Projects` | Base directory for relative file paths |
-| `UAT_DIR` | `$PROJECTS_DIR/uat-queue` | Where the UAT queue lives |
+| `UAT_DIR` | `~/Projects/uat-queue` | Where the UAT queue lives. A leading `~/` is expanded. |
 
-Each developer sets these to their own workspace. The MCP itself has no opinion about project structure, team names, or URLs.
+`PROJECTS_DIR` is gone (it only scoped the removed file tools). It is ignored if still set.
 
 ### Claude Desktop / Cowork
 
-Add to `claude_desktop_config.json`:
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "local-dev-bridge": {
       "command": "node",
-      "args": ["/path/to/local-dev-bridge-mcp/index.js"],
+      "args": ["/Users/you/Projects/local-dev-bridge-mcp/index.js"],
       "env": {
-        "PROJECTS_DIR": "/Users/you/Projects",
         "UAT_DIR": "/Users/you/Projects/uat-queue"
       }
     }
   }
 }
 ```
+
+Then, in each Cowork session that needs files, use **Add folder** to connect `~/Projects` (or just the project folder).
 
 ### Claude Code
 
-Add to your project's `.claude/settings.local.json`:
+```bash
+claude mcp add local-dev-bridge -s user -e UAT_DIR=$HOME/Projects/uat-queue -- node $HOME/Projects/local-dev-bridge-mcp/index.js
+```
+
+or in `.mcp.json` / `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "local-dev-bridge": {
       "command": "node",
-      "args": ["/path/to/local-dev-bridge-mcp/index.js"],
-      "env": {
-        "PROJECTS_DIR": "/Users/you/Projects",
-        "UAT_DIR": "/Users/you/Projects/uat-queue"
-      }
+      "args": ["/Users/you/Projects/local-dev-bridge-mcp/index.js"],
+      "env": { "UAT_DIR": "/Users/you/Projects/uat-queue" }
     }
   }
 }
 ```
 
-Both sessions point at the same filesystem and queue directory — that's the entire trick.
-
-### Claude in Chrome
-
-Chrome doesn't connect to the MCP directly. Instead, Cowork (Claude Desktop) acts as the bridge — it has both the MCP for file access and Chrome for browser automation. The workflow is:
+Allow-list entries for `.claude/settings.local.json` → `permissions.allow`:
 
 ```
-Claude Code ──writes tests──► MCP ──reads tests──► Cowork ──drives──► Chrome
+mcp__local-dev-bridge__uat_queue_test        mcp__local-dev-bridge__herdr_agent_list
+mcp__local-dev-bridge__uat_get_pending       mcp__local-dev-bridge__herdr_agent_read
+mcp__local-dev-bridge__uat_get_test          mcp__local-dev-bridge__herdr_agent_send
+mcp__local-dev-bridge__uat_claim_test        mcp__local-dev-bridge__herdr_pane_run
+mcp__local-dev-bridge__uat_complete_test     mcp__local-dev-bridge__herdr_wait
+mcp__local-dev-bridge__uat_get_results
+mcp__local-dev-bridge__uat_reset_test
+mcp__local-dev-bridge__uat_dashboard
 ```
 
-## Tools
+**Herdr tools act on the Mac the server runs on.** If the server is launched over SSH on another machine, `herdr_*` sees *that* machine's panes and the UAT tools see *that* machine's queue.
 
-### Filesystem Tools
+## Tools (13)
+
+### Herdr
+
+| Tool | Runs | Notes |
+|---|---|---|
+| `herdr_agent_list` | `herdr agent list` | Pane id, status, agent, title, cwd |
+| `herdr_agent_read {target, source?, lines?}` | `herdr agent read` | Defaults `--source recent --lines 120`; `lines` 1–2000 |
+| `herdr_agent_send {target, text}` | `herdr agent send` | Literal text, **no Enter**. Guarded (below) |
+| `herdr_pane_run {target, command}` | `herdr pane run` | Single-line command **+ Enter**. Guarded (below) |
+| `herdr_wait {target, status, timeout_ms?}` | `herdr agent wait` | `idle\|working\|blocked\|unknown`; default 30 s, max 600 s. Target must be an agent pane. Most MCP clients time a call out at ~60 s — keep `timeout_ms` under that unless your client allows more |
+
+Implementation: `/opt/homebrew/bin/herdr` is spawned with an argv array — **no shell** — and only the five subcommands above are allowed (no `start`, `attach`, `server`, `config`, …). Targets must match `[A-Za-z0-9][A-Za-z0-9_:.-]*`, so they can never be parsed as flags. 30 s default timeout.
+
+#### The un-sent-line rule
+
+`herdr_agent_send` and `herdr_pane_run` first read the target pane. If its input line already holds text the operator typed but has not sent, the call is **refused** with that text in the error — the bridge never types over it:
+
+```json
+{ "error": { "code": "unsent_operator_text",
+             "message": "Refused: the input line in w3:p1 already holds un-sent text. Not typing over it.",
+             "details": { "target": "w3:p1", "unsent_text": "ship it", "pane_kind": "claude" } } }
+```
+
+Detection (`lib/unsent.js`):
+
+- **Claude Code panes** — the `❯` line inside the input box (between the two horizontal rules). Claude Code draws its own *prompt suggestions* (e.g. `Try "fix typecheck errors"`, or a suggested `ship it`) as **dim** ghost text; those are not operator input and do not block. Anything rendered non-dim does.
+- **Shell panes** — the last non-blank line is a prompt (`user@host … %`/`$`/`#`, or a bare `$ `/`% `/`❯ `) followed by text.
+- Anything else is treated as empty. If refused, ask the operator to send or clear the line; there is no override.
+
+### UAT queue
 
 | Tool | Description |
 |---|---|
-| `read_file` | Read file contents (relative to PROJECTS_DIR or absolute) |
-| `write_file` | Create or overwrite a file |
-| `edit_file` | Find-and-replace within a file |
-| `list_directory` | List directory contents |
-| `run_command` | Execute a shell command |
-| `search_files` | Recursive text search across files |
+| `uat_queue_test` | Queue a test (name, http/https URL, steps, tags, priority, context) |
+| `uat_get_pending` | List pending tests (filter by tag/priority), critical first |
+| `uat_get_test` | Full test by ID from any queue directory |
+| `uat_claim_test` | **Atomic** claim (pending → in-progress via `rename`); a second claimer gets `already_claimed` |
+| `uat_complete_test` | Record pass/fail/blocked/skipped with per-step results (in-progress → results) |
+| `uat_get_results` | One result by ID, or a list filtered by status / `since` |
+| `uat_reset_test` | Move a test from in-progress or results back to pending |
+| `uat_dashboard` | Counts by state, priority, and result; pass rate |
 
-### UAT Queue Tools
+Hardening in v3:
 
-| Tool | Description |
-|---|---|
-| `uat_queue_test` | Queue a new test with steps, URL, priority, tags, and context |
-| `uat_get_pending` | List pending tests (filterable by tag/priority) |
-| `uat_get_test` | Read full test details by ID |
-| `uat_claim_test` | Claim a test for execution (moves pending → in-progress) |
-| `uat_complete_test` | Record results: pass/fail/blocked/skipped with per-step details |
-| `uat_get_results` | Retrieve results (filterable by status/date) |
-| `uat_reset_test` | Move a test back to pending for re-execution |
-| `uat_dashboard` | Overview of queue counts, priorities, and pass rates |
+- **Path confinement** — every file lives under `UAT_DIR`. `test_id` must match `[a-z0-9-]{1,100}`; `../`, `/abs/path`, dots and slashes are refused with `invalid_test_id`. Queue files that are symlinks are refused. `screenshot_path` (stored data) must be relative with no `..`, `~`, or absolute path.
+- **Atomic state moves** — claim, complete, and reset each start with a single `rename`, so two sessions cannot both win. Writes go temp file → `rename`.
+- **Validated input** — step `action` must be a supported action; enums, types, and `step_index` range are checked.
+- **Structured errors, never a stack trace** — every failure is `isError: true` with `{"error": {"code", "message", "details?"}}`. Codes: `invalid_test_id`, `invalid_argument`, `invalid_steps`, `path_not_allowed`, `not_found`, `already_claimed`, `already_completed`, `already_pending`, `not_claimed`, `corrupt_queue_file`, `unsent_operator_text`, `invalid_target`, `herdr_unavailable`, `herdr_failed`, `herdr_timeout`, `unknown_tool`, `internal_error`.
 
-## UAT Queue
-
-### The Workflow
+#### Workflow
 
 ```
-┌──────────────┐         uat-queue/          ┌────────────────────┐
-│  Claude Code │                             │  Cowork + Chrome   │
-│  (or any     │ ──queue_test──► pending/ ──►│  (or any session   │
-│   coding     │                             │   with browser     │
-│   session)   │ ◄──get_results── results/ ◄─│   access)          │
-└──────────────┘                             └────────────────────┘
+Claude Code ──uat_queue_test──► pending/ ──uat_claim_test──► Cowork + Chrome
+     ▲                                                            │
+     └──────uat_get_results◄── results/ ◄──uat_complete_test──────┘
 ```
 
-1. **Coding session** finishes a change and queues a UAT test via `uat_queue_test`
-2. **Browser session** calls `uat_get_pending` → `uat_claim_test` → executes in browser → `uat_complete_test`
-3. **Coding session** checks results with `uat_get_results` or `uat_dashboard`
-
-This can be driven manually or automated via CLAUDE.md instructions and hooks in each project.
-
-### Test Format
-
-Tests are JSON files with a companion `.md` for human readability:
+#### Test format (unchanged from v2)
 
 ```json
 {
   "id": "login-flow-happy-path-a1b2c3d4",
   "name": "Login flow happy path",
-  "url": "https://your-app.example.com/login",
+  "url": "http://your-app.lab/login",
   "priority": "high",
   "tags": ["auth", "smoke"],
   "context": "Just refactored the auth middleware — verify login still works",
   "steps": [
-    {
-      "action": "type",
-      "target": "#email",
-      "value": "test@example.com",
-      "description": "Enter email address"
-    },
-    {
-      "action": "click",
-      "target": "button[type='submit']",
-      "description": "Click the login button"
-    },
-    {
-      "action": "assert_url",
-      "value": "/dashboard",
-      "description": "Verify redirect to dashboard"
-    }
+    { "action": "type", "target": "#email", "value": "test@example.com", "description": "Enter email" },
+    { "action": "click", "target": "button[type='submit']", "description": "Submit" },
+    { "action": "assert_url", "value": "/dashboard", "description": "Lands on dashboard" }
   ],
   "created_at": "2026-04-06T12:00:00.000Z",
   "created_by": "claude-code",
@@ -158,115 +174,35 @@ Tests are JSON files with a companion `.md` for human readability:
 }
 ```
 
-### Supported Actions
+Supported actions: `navigate`, `click`, `type`, `select`, `scroll`, `wait`, `assert_visible`, `assert_text`, `assert_url`, `screenshot`, `custom`.
 
-| Action | Description |
-|---|---|
-| `navigate` | Go to a URL |
-| `click` | Click an element (CSS selector or description) |
-| `type` | Type text into an input |
-| `select` | Select a dropdown option |
-| `scroll` | Scroll the page or to an element |
-| `wait` | Wait for an element or a duration |
-| `assert_visible` | Verify an element is visible |
-| `assert_text` | Verify text content matches |
-| `assert_url` | Verify the current URL |
-| `screenshot` | Take a screenshot |
-| `custom` | Free-form instruction for the browser agent |
-
-### Queue Directory Structure
+#### Queue layout (unchanged)
 
 ```
 uat-queue/
-├── pending/          # Tests waiting to be run
-│   ├── test-id.json
-│   └── test-id.md
-├── in-progress/      # Tests currently being executed
-├── results/          # Completed tests with outcomes
-│   ├── test-id.json
-│   └── test-id.md
-└── archive/          # Old results (manual cleanup)
+├── pending/       tests waiting to run (id.json + id.md)
+├── in-progress/   claimed tests
+├── results/       completed tests with outcomes
+└── archive/       old results (manual)
 ```
 
-## Integrating With Your Project
+## Migrating from v2
 
-The MCP is project-agnostic. To wire it into a specific codebase:
+- **File tools are gone**: `read_file`, `write_file`, `edit_file`, `list_directory`, `search_files`, `run_command`. In Desktop/Cowork, connect a folder with **Add folder** instead; in Claude Code, use the built-in tools.
+- **Herdr via `run_command` → dedicated tools**: `herdr agent list|read|send`, `herdr pane run`, `herdr agent wait` map to `herdr_agent_list|read|send`, `herdr_pane_run`, `herdr_wait`. Other Herdr subcommands are not exposed.
+- **Config**: drop `PROJECTS_DIR`; keep `UAT_DIR` (its default moved from `$PROJECTS_DIR/uat-queue` to `~/Projects/uat-queue`).
+- **Permissions**: remove `mcp__local-dev-bridge__{read_file,write_file,edit_file,list_directory,search_files,run_command}` from allow lists; add the five `mcp__local-dev-bridge__herdr_*`.
+- **Errors**: error text is now a JSON object (`error.code`) instead of `Error: <message>`.
+- **Rollback**: `git checkout v2.0-pre-slim`, restore `PROJECTS_DIR`, restart the client.
 
-### 1. Add the MCP to `.claude/settings.local.json`
+## Testing
 
-```json
-{
-  "mcpServers": {
-    "local-dev-bridge": {
-      "command": "node",
-      "args": ["/path/to/local-dev-bridge-mcp/index.js"],
-      "env": {
-        "PROJECTS_DIR": "/Users/you/Projects",
-        "UAT_DIR": "/Users/you/Projects/uat-queue"
-      }
-    }
-  }
-}
+```bash
+UAT_DIR=~/Projects/uat-queue node test/regression.mjs <scratch-pane-id>   # full UAT + Herdr pass over MCP stdio
+node test/call.mjs uat_dashboard '{}'                                       # one-off tool call
 ```
 
-### 2. Add a deploy hook (optional)
-
-Add a PostToolUse hook to `.claude/settings.local.json` that reminds Claude Code to queue tests after deployment:
-
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qiE '(deploy|gcloud run|gcloud builds)'; then echo '\\n🧪 DEPLOYMENT DETECTED — Queue UAT tests before closing this session.'; fi"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### 3. Add instructions to CLAUDE.md
-
-Append a section to your project's `CLAUDE.md` telling Claude Code to:
-- Check `uat-queue/results/` for previous test outcomes before starting work
-- Queue tests to `uat-queue/pending/` after every deployment
-- Tell the developer to trigger browser testing in Cowork
-
-Example section:
-
-```markdown
-## UAT Queue — Post-Deployment Testing
-
-After every deployment, you MUST:
-1. Check `uat-queue/results/` for previous failures
-2. Write test JSON files to `uat-queue/pending/` based on what changed
-3. Tell the developer: "Tests queued. Open Cowork and say 'run UAT tests'"
-```
-
-### 4. Run tests from Cowork
-
-When the developer opens Cowork and says "run UAT tests", Cowork:
-1. Reads pending tests via the MCP
-2. Claims them (moves to in-progress)
-3. Executes each step in Chrome
-4. Writes results back to the queue
-
-No scheduled tasks, no polling — the developer triggers it as part of their deploy workflow.
-
-## Supported Combinations
-
-| Coding Session | Testing Session | How It Works |
-|---|---|---|
-| Claude Code | Cowork + Chrome | Most common. Code writes tests, Cowork drives Chrome. |
-| Cowork | Cowork + Chrome | Same session can write and execute tests. |
-| Claude Code | Claude Code | Code reads results from a previous Chrome session. |
-| Any | Any | The queue is just files. Any session with the MCP can read/write. |
+`regression.mjs` leaves one `skipped` result (tag `bridge-smoke`) in `results/`. Give it a **scratch** shell pane (e.g. `herdr pane split <pane> --direction down --no-focus`) — it types into it. `herdr_wait` needs an agent pane, so test it against a scratch Claude Code session.
 
 ## License
 

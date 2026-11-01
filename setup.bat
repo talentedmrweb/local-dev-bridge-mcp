@@ -46,7 +46,7 @@ echo     "local-dev-bridge": {
 echo       "command": "node",
 echo       "args": ["%CURRENT_DIR:\=/%/index.js"],
 echo       "env": {
-echo         "PROJECTS_DIR": "%USERPROFILE:\=/%/Desktop/Projects"
+echo         "UAT_DIR": "%USERPROFILE:\=/%/Projects/uat-queue"
 echo       }
 echo     }
 echo   }
@@ -68,7 +68,7 @@ if exist "%CONFIG_PATH%" (
             echo       "command": "node",
             echo       "args": ["%CURRENT_DIR:\=/%/index.js"],
             echo       "env": {
-            echo         "PROJECTS_DIR": "%USERPROFILE:\=/%/Desktop/Projects"
+            echo         "UAT_DIR": "%USERPROFILE:\=/%/Projects/uat-queue"
             echo       }
             echo     }
             echo   }
@@ -84,7 +84,7 @@ echo.
 echo Next steps:
 echo 1. Make sure Claude Desktop is completely closed
 echo 2. Verify the configuration in: %CONFIG_PATH%
-echo 3. Adjust PROJECTS_DIR if needed
+echo 3. Adjust UAT_DIR if needed
 echo 4. Start Claude Desktop
 echo.
 echo Happy coding!

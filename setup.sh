@@ -58,7 +58,7 @@ echo "    \"local-dev-bridge\": {"
 echo "      \"command\": \"node\","
 echo "      \"args\": [\"$CURRENT_DIR/index.js\"],"
 echo "      \"env\": {"
-echo "        \"PROJECTS_DIR\": \"$HOME/Desktop/Projects\""
+echo "        \"UAT_DIR\": \"$HOME/Projects/uat-queue\""
 echo "      }"
 echo "    }"
 echo "  }"
@@ -80,7 +80,7 @@ else
       "command": "node",
       "args": ["$CURRENT_DIR/index.js"],
       "env": {
-        "PROJECTS_DIR": "$HOME/Desktop/Projects"
+        "UAT_DIR": "$HOME/Projects/uat-queue"
       }
     }
   }
@@ -96,7 +96,7 @@ echo ""
 echo "Next steps:"
 echo "1. Make sure Claude Desktop is completely closed"
 echo "2. Verify the configuration in: $CONFIG_PATH"
-echo "3. Adjust PROJECTS_DIR if needed (currently set to: $HOME/Desktop/Projects)"
+echo "3. Adjust UAT_DIR if needed (currently set to: $HOME/Projects/uat-queue)"
 echo "4. Start Claude Desktop"
 echo ""
 echo "Happy coding! 🚀"

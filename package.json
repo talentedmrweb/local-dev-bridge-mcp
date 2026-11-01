@@ -1,18 +1,17 @@
 {
   "name": "local-dev-bridge-mcp",
-  "version": "2.0.0",
-  "description": "MCP server bridging Claude Code and Claude in Chrome — local filesystem access plus a UAT test queue for cross-session browser testing",
+  "version": "3.0.0",
+  "description": "MCP server for Herdr agent/pane control and a file-based UAT test queue (Claude Code ↔ Cowork + Claude in Chrome). File/shell work moves to the native device bridge.",
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node test/regression.mjs"
   },
   "keywords": [
     "mcp",
     "claude",
-    "development",
-    "local",
-    "file-system",
+    "herdr",
     "uat",
     "testing",
     "browser",
@@ -22,11 +21,13 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
-    "glob": "^10.3.10",
-    "minimatch": "^9.0.3"
+    "@modelcontextprotocol/sdk": "^1.0.4"
   },
   "engines": {
-    "node": ">=16.0.0"
-  }
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "index.js",
+    "lib/"
+  ]
 }
