@@ -186,6 +186,24 @@ uat-queue/
 └── archive/       old results (manual)
 ```
 
+## UAT worker (headless queue consumer)
+
+`worker/uat-worker.mjs` drains the queue without a human-driven session. It is the GHOST consumer (COMMANDER keeps its interactive `~/Projects/uat-worker` session).
+
+- **Queue access:** listing `pending/` / `in-progress/` is read-only; every claim / complete / reset goes through this MCP server (spawned over stdio). Atomic claims mean it can coexist with other claimers.
+- **Browser:** launches (or attaches to) this Mac's Chrome on `127.0.0.1:9333` with its own profile `~/.chrome-claude/uat-worker` (headless by default) and drives it over CDP.
+- **Steps:** `navigate`, `click`, `type`, `select`, `scroll`, `wait`, `assert_visible`, `assert_text`, `assert_url`, `screenshot` run deterministically (no LLM). `custom` steps need `UAT_AGENT=claude` (headless `claude -p` limited to chrome-devtools-mcp tools); with `UAT_AGENT=off` (default) they are skipped and the test is marked `blocked`.
+- **Ops:** singleton lock `$UAT_DIR/.worker.lock`; writes `$UAT_DIR/.status.json` every tick (same schema as COMMANDER's status pusher); reaps tests stuck in-progress > 15 min back to pending; infra failures (Chrome down) give the test back instead of failing it; 3 in a row → 5 min backoff.
+- **Flags:** `--once`, `--dry-run` (claims nothing), `--only <id-prefix>`, `--loopback-only`.
+
+```bash
+./launchd/install.sh            # render + lint plist, worker --dry-run (changes nothing)
+./launchd/install.sh --load     # install ~/Library/LaunchAgents/com.22ndventures.uat-worker.plist + bootstrap
+./launchd/install.sh --status   # state + log tail (~/Library/Logs/uat-worker/)
+./launchd/install.sh --unload   # rollback
+node test/worker-smoke.mjs      # loopback smoke against the real queue: queue → claim → complete → results
+```
+
 ## Migrating from v2
 
 - **File tools are gone**: `read_file`, `write_file`, `edit_file`, `list_directory`, `search_files`, `run_command`. In Desktop/Cowork, connect a folder with **Add folder** instead; in Claude Code, use the built-in tools.

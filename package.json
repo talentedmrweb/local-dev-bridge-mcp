@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "test": "node test/regression.mjs"
+    "test": "node test/regression.mjs",
+    "smoke:worker": "node test/worker-smoke.mjs",
+    "worker": "node worker/uat-worker.mjs"
   },
   "keywords": [
     "mcp",
@@ -28,6 +30,8 @@
   },
   "files": [
     "index.js",
-    "lib/"
+    "lib/",
+    "worker/",
+    "launchd/"
   ]
 }

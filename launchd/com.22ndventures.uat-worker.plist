@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- UAT worker (GHOST). Template: launchd/install.sh renders __HOME__ / __REPO__ / __NODE__. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.22ndventures.uat-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/worker/uat-worker.mjs</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>UAT_DIR</key>
+    <string>__HOME__/Projects/uat-queue</string>
+    <key>UAT_CHROME_PORT</key>
+    <string>9333</string>
+    <key>UAT_CHROME_PROFILE</key>
+    <string>__HOME__/.chrome-claude/uat-worker</string>
+    <key>UAT_CHROME_HEADLESS</key>
+    <string>1</string>
+    <key>UAT_POLL_SECONDS</key>
+    <string>15</string>
+    <key>UAT_AGENT</key>
+    <string>off</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/uat-worker/uat-worker.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/uat-worker/uat-worker.err.log</string>
+</dict>
+</plist>
