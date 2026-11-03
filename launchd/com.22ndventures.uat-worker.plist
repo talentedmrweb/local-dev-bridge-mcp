@@ -38,7 +38,7 @@
   <key>ThrottleInterval</key>
   <integer>30</integer>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
   <key>StandardOutPath</key>
   <string>__HOME__/Library/Logs/uat-worker/uat-worker.out.log</string>
   <key>StandardErrorPath</key>

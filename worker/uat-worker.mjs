@@ -190,6 +190,7 @@ async function chromeVersion() {
 async function ensureChrome() {
   const v = await chromeVersion();
   if (v) return v;
+  if (chromeProc) return waitForCdp(); // a launch is still warming up — never spawn a second Chrome on the same profile
   await fs.mkdir(CHROME_PROFILE, { recursive: true });
   const args = [
     `--remote-debugging-port=${CHROME_PORT}`, '--remote-debugging-address=127.0.0.1',
@@ -199,13 +200,20 @@ async function ensureChrome() {
   if (CHROME_HEADLESS) args.push('--headless=new');
   log(`[CHROME] launching on 127.0.0.1:${CHROME_PORT} (${CHROME_HEADLESS ? 'headless' : 'headed'}) profile ${CHROME_PROFILE}`);
   chromeProc = spawn(CHROME_BIN, args, { stdio: 'ignore', detached: false });
-  chromeProc.on('exit', (c) => { log(`[CHROME] exited (${c})`); chromeProc = null; });
-  for (let i = 0; i < 40; i++) {
+  const proc = chromeProc;
+  proc.on('exit', (c) => { log(`[CHROME] exited (${c})`); if (chromeProc === proc) chromeProc = null; });
+  return waitForCdp();
+}
+
+// Cold start under launchd can take >10s; wait up to 45s for the debugging port.
+async function waitForCdp() {
+  for (let i = 0; i < 180; i++) {
     await sleep(250);
-    const vv = await chromeVersion();
-    if (vv) return vv;
+    const v = await chromeVersion();
+    if (v) return v;
+    if (!chromeProc) break;
   }
-  throw Object.assign(new Error('Chrome did not expose CDP within 10s'), { code: 'chrome_unreachable' });
+  throw Object.assign(new Error('Chrome did not expose CDP within 45s'), { code: 'chrome_unreachable' });
 }
 
 class Page {
