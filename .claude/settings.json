@@ -1,5 +1,6 @@
 {
   "permissions": {
+    "defaultMode": "bypassPermissions",
     "allow": [
       "Bash(./scripts/deploy.sh *)",
       "Bash(ssh -i ~/.ssh/id_ed25519_cluster ghost1@192.168.1.200 *)",
