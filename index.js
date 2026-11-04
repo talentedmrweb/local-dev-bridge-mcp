@@ -11,6 +11,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
+import { existsSync } from 'fs';
 import { detectUnsent } from './lib/unsent.js';
 
 const VERSION = '3.0.0';
@@ -28,7 +29,9 @@ function expandHome(p) {
 const UAT_DIR = path.resolve(expandHome(process.env.UAT_DIR || path.join(os.homedir(), 'Projects', 'uat-queue')));
 const QUEUE_DIRS = ['pending', 'in-progress', 'results', 'archive'];
 
-const HERDR_BIN = '/opt/homebrew/bin/herdr';
+// Fixed allow-list of Homebrew prefixes (Apple Silicon, Intel). No PATH lookup, no shell.
+const HERDR_CANDIDATES = ['/opt/homebrew/bin/herdr', '/usr/local/bin/herdr'];
+const HERDR_BIN = HERDR_CANDIDATES.find((p) => existsSync(p)) || HERDR_CANDIDATES[0];
 const HERDR_DEFAULT_TIMEOUT_MS = 30_000;
 
 const PRIORITIES = ['critical', 'high', 'medium', 'low'];
