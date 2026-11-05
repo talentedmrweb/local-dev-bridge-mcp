@@ -13,8 +13,9 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { detectUnsent } from './lib/unsent.js';
+import { checkSubmit, checkPickerScreen, mapKeys, KEY_MAP, MAX_KEYS } from './lib/guards.js';
 
-const VERSION = '3.0.0';
+const VERSION = '3.1.0';
 
 // ──────────────────────────────────────────────
 // Config — UAT_DIR is the only setting.
@@ -185,7 +186,11 @@ const skippedNote = (skipped) => (skipped.length ? `\n\n⚠️ Skipped ${skipped
 // Herdr — argv only, no shell, fixed subcommand allow-list.
 // ──────────────────────────────────────────────
 
-const HERDR_ALLOWED = new Set(['agent list', 'pane read', 'pane send-text', 'pane run', 'agent wait']);
+const HERDR_ALLOWED = new Set(['agent list', 'pane read', 'pane send-text', 'pane run', 'agent wait', 'pane send-keys']);
+
+// Text the bridge typed via herdr_agent_send, per target: { text, at }. In memory only, so a restart forgets it
+// (fail closed: herdr_pane_submit then refuses).
+const sentByBridge = new Map();
 const TARGET_RE = /^[A-Za-z0-9][A-Za-z0-9_:.\-]{0,127}$/;
 
 function assertTarget(t) {
@@ -403,6 +408,29 @@ const TOOLS = [
         command: { type: 'string', description: 'Single-line command; Enter is pressed after it' },
       },
       required: ['target', 'command'],
+    },
+  },
+  {
+    name: 'herdr_pane_submit',
+    description:
+      "Press Enter in a Herdr pane, only to submit text the bridge itself typed there via herdr_agent_send in the last 5 minutes. Refuses if the input line holds anything else (e.g. the operator's own un-sent text) or a permission prompt is showing.",
+    inputSchema: {
+      type: 'object',
+      properties: { target: { type: 'string', description: 'Pane id (e.g. "wN:p1")' } },
+      required: ['target'],
+    },
+  },
+  {
+    name: 'herdr_pane_keys',
+    description:
+      'Send navigation keys to answer a Claude Code AskUserQuestion picker ("Enter to select"). Allowed keys: Enter, Esc, Up, Down, Tab, 1-9. Refuses on tool-permission, approval or trust prompts, and when no picker is visible.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Pane id (e.g. "wN:p1")' },
+        keys: { type: 'array', items: { type: 'string', enum: Object.keys(KEY_MAP) }, minItems: 1, maxItems: MAX_KEYS, description: 'Keys in order, e.g. ["2"] or ["Down","Enter"]' },
+      },
+      required: ['target', 'keys'],
     },
   },
   {
@@ -708,7 +736,37 @@ async function herdrAgentSend(args) {
   const before = await guardUnsent(target);
   // herdr 0.9.x dropped `agent send`; `pane send-text` is the literal, no-Enter equivalent.
   await herdr(['pane', 'send-text', target, t]);
+  sentByBridge.set(target, { text: t, at: Date.now() });
   return text(`✉️ Sent ${t.length} chars to ${target} (no Enter)${suggestionNote(before)}.`);
+}
+
+async function readScreen(target) {
+  const { json, raw } = await herdr(['pane', 'read', target, '--source', 'visible', '--format', 'ansi']);
+  const screen = readText(json, raw);
+  if (typeof screen !== 'string') fail('herdr_failed', 'Could not read the target pane.', { target });
+  return screen;
+}
+
+async function herdrPaneSubmit(args) {
+  const target = assertTarget(args.target);
+  const screen = await readScreen(target);
+  const approval = checkPickerScreen(screen);
+  if (approval.code === 'approval_prompt') fail(approval.code, approval.reason, { target });
+  const v = checkSubmit(detectUnsent(screen), sentByBridge.get(target));
+  if (!v.ok) fail(v.code, v.reason, { target });
+  await herdr(['pane', 'send-keys', target, 'enter']);
+  sentByBridge.delete(target);
+  return text(`⏎ Submitted the bridge's own text in ${target}.`);
+}
+
+async function herdrPaneKeys(args) {
+  const target = assertTarget(args.target);
+  const m = mapKeys(args.keys);
+  if (!m.ok) fail(m.code, m.reason);
+  const v = checkPickerScreen(await readScreen(target));
+  if (!v.ok) fail(v.code, v.reason, { target });
+  await herdr(['pane', 'send-keys', target, ...m.keys]);
+  return text(`⌨️ Sent ${args.keys.join(' ')} to the picker in ${target}.`);
 }
 
 async function herdrPaneRun(args) {
@@ -717,6 +775,7 @@ async function herdrPaneRun(args) {
   if (/[\r\n]/.test(command)) fail('invalid_argument', 'command must be a single line (Enter is added for you).');
   const before = await guardUnsent(target);
   await herdr(['pane', 'run', target, command]);
+  sentByBridge.delete(target);
   return text(`▶️ Ran in ${target}: ${command}${suggestionNote(before)}`);
 }
 
@@ -823,6 +882,8 @@ const HANDLERS = {
   herdr_agent_send: herdrAgentSend,
   herdr_pane_run: herdrPaneRun,
   herdr_wait: herdrWait,
+  herdr_pane_submit: herdrPaneSubmit,
+  herdr_pane_keys: herdrPaneKeys,
 };
 
 const server = new Server({ name: 'local-dev-bridge-mcp', version: VERSION }, { capabilities: { tools: {} } });

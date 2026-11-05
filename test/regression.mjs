@@ -5,9 +5,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFile } from 'child_process';
+import { existsSync } from 'fs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = process.argv[2];
+const HERDR = ['/opt/homebrew/bin/herdr', '/usr/local/bin/herdr'].find((p) => existsSync(p)) || 'herdr';
 
 async function connect() {
   const transport = new StdioClientTransport({
@@ -48,11 +51,11 @@ const { tools } = await a.listTools();
 const names = tools.map((t) => t.name).sort();
 console.log('tools/list:', names.join(', '));
 const want = [
-  'herdr_agent_list', 'herdr_agent_read', 'herdr_agent_send', 'herdr_pane_run', 'herdr_wait',
+  'herdr_agent_list', 'herdr_agent_read', 'herdr_agent_send', 'herdr_pane_keys', 'herdr_pane_run', 'herdr_pane_submit', 'herdr_wait',
   'uat_claim_test', 'uat_complete_test', 'uat_dashboard', 'uat_get_pending', 'uat_get_results',
   'uat_get_test', 'uat_queue_test', 'uat_reset_test',
 ].sort();
-check('tools/list = exactly 8 uat_* + 5 herdr_*', JSON.stringify(names) === JSON.stringify(want), `${names.length} tools`);
+check('tools/list = exactly 8 uat_* + 7 herdr_*', JSON.stringify(names) === JSON.stringify(want), `${names.length} tools`);
 check('no file/shell tools', !names.some((n) => ['read_file', 'write_file', 'edit_file', 'list_directory', 'search_files', 'run_command'].includes(n)));
 
 // ── UAT happy path ──
@@ -171,6 +174,29 @@ if (scratch) {
   check('herdr_pane_run REFUSES over un-sent line', u.error?.code === 'unsent_operator_text', `unsent_text="${u.error?.details?.unsent_text}"`);
   r = await call(a, 'herdr_agent_send', { target: scratch, text: 'more' });
   check('herdr_agent_send REFUSES over un-sent line', errCode(r) === 'unsent_operator_text');
+
+  // ── WO-CMD-4: herdr_pane_submit / herdr_pane_keys ──
+  r = await call(b, 'herdr_pane_submit', { target: scratch });
+  check('herdr_pane_submit REFUSES from a client that did not type it', errCode(r) === 'not_bridge_text', `code=${errCode(r)}`);
+  r = await call(a, 'herdr_pane_submit', { target: scratch });
+  check('herdr_pane_submit submits the bridge\'s own text', !r.isError, body(r));
+  await new Promise((res) => setTimeout(res, 800));
+  r = await call(a, 'herdr_agent_read', { target: scratch, source: 'recent', lines: 20 });
+  check('submitted line ran (output visible)', (body(r).match(/OPERATOR-UNSENT-LINE/g) || []).length >= 2);
+  r = await call(a, 'herdr_pane_submit', { target: scratch });
+  check('herdr_pane_submit REFUSES a second Enter (record cleared)', errCode(r) === 'not_bridge_text', `code=${errCode(r)}`);
+
+  // Simulate the operator typing directly (not through the bridge).
+  await new Promise((res, rej) => execFile(HERDR, ['pane', 'send-text', scratch, 'echo NATE-TYPED-THIS'], (e) => (e ? rej(e) : res())));
+  r = await call(a, 'herdr_pane_submit', { target: scratch });
+  check('herdr_pane_submit REFUSES operator-typed text', errCode(r) === 'not_bridge_text', `code=${errCode(r)}`);
+  r = await call(a, 'herdr_agent_read', { target: scratch, source: 'recent', lines: 20 });
+  check('operator text was NOT submitted', (body(r).match(/NATE-TYPED-THIS/g) || []).length === 1);
+
+  r = await call(a, 'herdr_pane_keys', { target: scratch, keys: ['Enter'] });
+  check('herdr_pane_keys REFUSES with no picker visible (would submit operator text)', errCode(r) === 'no_picker', `code=${errCode(r)}`);
+  r = await call(a, 'herdr_pane_keys', { target: scratch, keys: ['y'] });
+  check('herdr_pane_keys REFUSES a key off the allow-list', errCode(r) === 'key_not_allowed' || r.isError, `code=${errCode(r)}`);
 
   for (const [label, tool, args, code] of [
     ['herdr target flag injection', 'herdr_agent_read', { target: '--help' }, 'invalid_target'],
