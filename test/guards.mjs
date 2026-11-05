@@ -30,6 +30,22 @@ check('keys: picker plus "Allow" anywhere on screen REFUSED', permOnPicker.code 
 const permWord = checkPickerScreen(fx('picker').replace('Which color', 'Grant permission for which color'));
 check('keys: "permission" in the question REFUSED', permWord.code === 'approval_prompt');
 
+// Active-block scoping (STEWARD probe finding on PR #4): only the live prompt is judged.
+const oldScroll = Array.from({ length: 30 }, (_, i) => (i === 3 ? '⏺ Earlier: Bash permission granted. Allow list updated; do you want to keep it?' : `  log line ${i}`)).join('\n');
+const busyPicker = checkPickerScreen(oldScroll + '\n' + fx('picker'));
+check('keys: picker under old "permission"/"allow" scrollback → ALLOWED', busyPicker.ok, busyPicker.reason);
+const busyPerm = checkPickerScreen(oldScroll + '\n' + fx('perm'));
+check('keys: real permission prompt under scrollback → still REFUSED', busyPerm.code === 'approval_prompt', busyPerm.reason);
+const bareYesNo = ['⏺ Running build', '────────────', ' Bash command', '   rm -rf build', ' Proceed?', ' ❯ 1. Yes', '   2. No', ' Esc to cancel · Tab to amend'].join('\n');
+const yn = checkPickerScreen(bareYesNo);
+check('keys: permission prompt "1. Yes / 2. No" + "Tab to amend" (no approval words) → REFUSED', yn.code === 'approval_prompt', yn.reason);
+const cookies = checkPickerScreen(fx('picker').replace('Choose green', 'Allow cookies'));
+check('keys: picker whose option says "Allow cookies" → REFUSED (fail safe)', cookies.code === 'approval_prompt', cookies.reason);
+const permAboveWindow = checkPickerScreen(['Do you want to proceed?', ...Array.from({ length: 20 }, (_, i) => `  output ${i}`), fx('picker')].join('\n'));
+check('keys: "Do you want to" far above the live picker → ALLOWED', permAboveWindow.ok, permAboveWindow.reason);
+const noFooter = checkPickerScreen(oldScroll);
+check('keys: no prompt footer at all → no_picker', noFooter.code === 'no_picker');
+
 check('keys: allow-list maps to herdr names', JSON.stringify(mapKeys(['Down', 'Enter', '3', 'Esc', 'Up', 'Tab', '9']).keys) === '["down","enter","3","esc","up","tab","9"]');
 for (const bad of [['y'], ['0'], ['enter'], ['C-c'], ['Enter; rm -rf /'], ['\r'], [1], []]) {
   const m = mapKeys(bad);
