@@ -185,7 +185,7 @@ const skippedNote = (skipped) => (skipped.length ? `\n\n⚠️ Skipped ${skipped
 // Herdr — argv only, no shell, fixed subcommand allow-list.
 // ──────────────────────────────────────────────
 
-const HERDR_ALLOWED = new Set(['agent list', 'agent read', 'agent send', 'pane run', 'agent wait']);
+const HERDR_ALLOWED = new Set(['agent list', 'agent read', 'pane send-text', 'pane run', 'agent wait']);
 const TARGET_RE = /^[A-Za-z0-9][A-Za-z0-9_:.\-]{0,127}$/;
 
 function assertTarget(t) {
@@ -376,7 +376,7 @@ const TOOLS = [
   },
   {
     name: 'herdr_agent_send',
-    description: "Type literal text into a Herdr agent's input (herdr agent send) — no Enter. Refuses if the input line already holds un-sent operator text.",
+    description: "Type literal text into a Herdr agent's input (herdr pane send-text) — no Enter. Refuses if the input line already holds un-sent operator text.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -700,7 +700,8 @@ async function herdrAgentSend(args) {
   const target = assertTarget(args.target);
   const t = assertString(args.text, 'text', { required: true, max: 20_000 });
   const before = await guardUnsent(target);
-  await herdr(['agent', 'send', target, t]);
+  // herdr 0.9.x dropped `agent send`; `pane send-text` is the literal, no-Enter equivalent.
+  await herdr(['pane', 'send-text', target, t]);
   return text(`✉️ Sent ${t.length} chars to ${target} (no Enter)${suggestionNote(before)}.`);
 }
 

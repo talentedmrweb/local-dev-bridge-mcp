@@ -103,7 +103,7 @@ mcp__local-dev-bridge__uat_dashboard
 |---|---|---|
 | `herdr_agent_list` | `herdr agent list` | Pane id, status, agent, title, cwd |
 | `herdr_agent_read {target, source?, lines?}` | `herdr agent read` | Defaults `--source recent --lines 120`; `lines` 1–2000 |
-| `herdr_agent_send {target, text}` | `herdr agent send` | Literal text, **no Enter**. Guarded (below) |
+| `herdr_agent_send {target, text}` | `herdr pane send-text` | Literal text, **no Enter**. Guarded (below) |
 | `herdr_pane_run {target, command}` | `herdr pane run` | Single-line command **+ Enter**. Guarded (below) |
 | `herdr_wait {target, status, timeout_ms?}` | `herdr agent wait` | `idle\|working\|blocked\|unknown`; default 30 s, max 600 s. Target must be an agent pane. Most MCP clients time a call out at ~60 s — keep `timeout_ms` under that unless your client allows more |
 
