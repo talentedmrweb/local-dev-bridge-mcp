@@ -102,12 +102,12 @@ mcp__local-dev-bridge__uat_dashboard
 | Tool | Runs | Notes |
 |---|---|---|
 | `herdr_agent_list` | `herdr agent list` | Pane id, status, agent, title, cwd |
-| `herdr_agent_read {target, source?, lines?}` | `herdr agent read` | Defaults `--source recent --lines 120`; `lines` 1–2000 |
+| `herdr_agent_read {target, source?, lines?}` | `herdr pane read` | Defaults `--source recent --lines 120`; `lines` 1–2000 |
 | `herdr_agent_send {target, text}` | `herdr pane send-text` | Literal text, **no Enter**. Guarded (below) |
 | `herdr_pane_run {target, command}` | `herdr pane run` | Single-line command **+ Enter**. Guarded (below) |
-| `herdr_wait {target, status, timeout_ms?}` | `herdr agent wait` | `idle\|working\|blocked\|unknown`; default 30 s, max 600 s. Target must be an agent pane. Most MCP clients time a call out at ~60 s — keep `timeout_ms` under that unless your client allows more |
+| `herdr_wait {target, status, timeout_ms?}` | `herdr agent wait --until` | `idle\|working\|blocked\|done\|unknown`; default 30 s, max 600 s. Target must be an agent pane. Most MCP clients time a call out at ~60 s — keep `timeout_ms` under that unless your client allows more |
 
-Implementation: `/opt/homebrew/bin/herdr` is spawned with an argv array — **no shell** — and only the five subcommands above are allowed (no `start`, `attach`, `server`, `config`, …). Targets must match `[A-Za-z0-9][A-Za-z0-9_:.-]*`, so they can never be parsed as flags. 30 s default timeout.
+Implementation: The first of `/opt/homebrew/bin/herdr`, `/usr/local/bin/herdr` that exists is spawned with an argv array — **no shell** — and only the five subcommands above are allowed (no `start`, `attach`, `server`, `config`, …). Targets must match `[A-Za-z0-9][A-Za-z0-9_:.-]*`, so they can never be parsed as flags. 30 s default timeout.
 
 #### The un-sent-line rule
 
