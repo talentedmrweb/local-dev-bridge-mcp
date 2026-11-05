@@ -11,6 +11,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
+import { existsSync } from 'fs';
 import { detectUnsent } from './lib/unsent.js';
 
 const VERSION = '3.0.0';
@@ -28,7 +29,9 @@ function expandHome(p) {
 const UAT_DIR = path.resolve(expandHome(process.env.UAT_DIR || path.join(os.homedir(), 'Projects', 'uat-queue')));
 const QUEUE_DIRS = ['pending', 'in-progress', 'results', 'archive'];
 
-const HERDR_BIN = '/opt/homebrew/bin/herdr';
+// Fixed allow-list of Homebrew prefixes (Apple Silicon, Intel). No PATH lookup, no shell.
+const HERDR_CANDIDATES = ['/opt/homebrew/bin/herdr', '/usr/local/bin/herdr'];
+const HERDR_BIN = HERDR_CANDIDATES.find((p) => existsSync(p)) || HERDR_CANDIDATES[0];
 const HERDR_DEFAULT_TIMEOUT_MS = 30_000;
 
 const PRIORITIES = ['critical', 'high', 'medium', 'low'];
@@ -38,7 +41,7 @@ const STEP_ACTIONS = [
   'navigate', 'click', 'type', 'select', 'scroll', 'wait',
   'assert_visible', 'assert_text', 'assert_url', 'screenshot', 'custom',
 ];
-const AGENT_STATUSES = ['idle', 'working', 'blocked', 'unknown'];
+const AGENT_STATUSES = ['idle', 'working', 'blocked', 'done', 'unknown'];
 const READ_SOURCES = ['visible', 'recent', 'recent-unwrapped'];
 const EMOJI = { passed: '✅', failed: '❌', blocked: '🚫', skipped: '⏭️' };
 
@@ -182,7 +185,7 @@ const skippedNote = (skipped) => (skipped.length ? `\n\n⚠️ Skipped ${skipped
 // Herdr — argv only, no shell, fixed subcommand allow-list.
 // ──────────────────────────────────────────────
 
-const HERDR_ALLOWED = new Set(['agent list', 'agent read', 'agent send', 'pane run', 'agent wait']);
+const HERDR_ALLOWED = new Set(['agent list', 'pane read', 'pane send-text', 'pane run', 'agent wait']);
 const TARGET_RE = /^[A-Za-z0-9][A-Za-z0-9_:.\-]{0,127}$/;
 
 function assertTarget(t) {
@@ -216,9 +219,16 @@ function herdr(args, { timeoutMs = HERDR_DEFAULT_TIMEOUT_MS } = {}) {
 }
 
 // House rule: never type over operator text that is sitting un-sent in a pane.
+function readText(json, raw) {
+  const t = json?.result?.read?.text;
+  if (typeof t === 'string') return t;
+  return json === undefined ? raw : undefined;
+}
+
 async function guardUnsent(target) {
-  const { json } = await herdr(['agent', 'read', target, '--source', 'visible', '--format', 'ansi']);
-  const screen = json?.result?.read?.text;
+  // `pane read` works on any pane (shell or agent); herdr 0.9.x prints plain text, older builds a JSON envelope.
+  const { json, raw } = await herdr(['pane', 'read', target, '--source', 'visible', '--format', 'ansi']);
+  const screen = readText(json, raw);
   if (typeof screen !== 'string') fail('herdr_failed', 'Could not read the target pane to check its input line.', { target });
   const d = detectUnsent(screen);
   if (d.state === 'unsent') {
@@ -360,7 +370,7 @@ const TOOLS = [
   },
   {
     name: 'herdr_agent_read',
-    description: "Read a Herdr pane's screen/scrollback (herdr agent read). Defaults: source=recent, lines=120.",
+    description: "Read a Herdr pane's screen/scrollback (herdr pane read). Defaults: source=recent, lines=120.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -373,7 +383,7 @@ const TOOLS = [
   },
   {
     name: 'herdr_agent_send',
-    description: "Type literal text into a Herdr agent's input (herdr agent send) — no Enter. Refuses if the input line already holds un-sent operator text.",
+    description: "Type literal text into a Herdr agent's input (herdr pane send-text) — no Enter. Refuses if the input line already holds un-sent operator text.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -688,16 +698,16 @@ async function herdrAgentRead(args) {
     if (!Number.isInteger(args.lines) || args.lines < 1 || args.lines > 2000) fail('invalid_argument', 'lines must be an integer 1–2000.');
     lines = args.lines;
   }
-  const { json, raw } = await herdr(['agent', 'read', target, '--source', source, '--lines', String(lines)]);
-  const t = json?.result?.read?.text;
-  return text(typeof t === 'string' ? t : raw);
+  const { json, raw } = await herdr(['pane', 'read', target, '--source', source, '--lines', String(lines)]);
+  return text(readText(json, raw));
 }
 
 async function herdrAgentSend(args) {
   const target = assertTarget(args.target);
   const t = assertString(args.text, 'text', { required: true, max: 20_000 });
   const before = await guardUnsent(target);
-  await herdr(['agent', 'send', target, t]);
+  // herdr 0.9.x dropped `agent send`; `pane send-text` is the literal, no-Enter equivalent.
+  await herdr(['pane', 'send-text', target, t]);
   return text(`✉️ Sent ${t.length} chars to ${target} (no Enter)${suggestionNote(before)}.`);
 }
 
@@ -720,7 +730,7 @@ async function herdrWait(args) {
     }
     timeoutMs = args.timeout_ms;
   }
-  const { raw } = await herdr(['agent', 'wait', target, '--status', status, '--timeout', String(timeoutMs)], { timeoutMs: timeoutMs + 5000 });
+  const { raw } = await herdr(['agent', 'wait', target, '--until', status, '--timeout', String(timeoutMs)], { timeoutMs: timeoutMs + 5000 });
   return text(`⏱️ ${target} reached status "${status}".\n${raw.trim()}`);
 }
 
