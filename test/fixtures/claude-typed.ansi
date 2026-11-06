@@ -1,0 +1,29 @@
+
+[0m[38;2;215;119;87m ▐[0m[38;2;215;119;87m[48;2;0;0;0m▛███▛█[0m   [0m[1mClaude Code[0m [0m[38;2;153;153;153mv2.1.318[0m
+[0m[38;2;215;119;87m▝▜[0m[38;2;215;119;87m[48;2;0;0;0m█████[0m[38;2;215;119;87m█▀  [0m[38;2;153;153;153mHaiku 5.5 · Claude Max[0m
+[0m[38;2;215;119;87m ▝▝   ▝▝ [0m  [0m[38;2;153;153;153m/…/xwork[0m
+
+[0m[38;2;255;193;7m⚠ 1 MCP server needs authentication[0m[38;2;153;153;153m · run /mcp[0m
+
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mUse the AskUserQuestion tool right now to ask me which color I prefer, with [0m[48;2;55;55;55m    [0m
+[0m[48;2;55;55;55m  [0m[38;2;255;255;255m[48;2;55;55;55moptions Red, Green and Blue. Do nothing else.[0m[48;2;55;55;55m                                   [0m
+
+[0m[38;2;153;153;153m⏺ [0mUser answered Claude's questions:
+[0m[38;2;153;153;153m  ⎿  · Which color do you prefer? → Green[0m
+
+[0m[38;2;255;255;255m⏺[0m You picked Green.
+
+[0m[38;2;153;153;153m✻[0m [0m[38;2;153;153;153mChurned for 4s · done 11:56 PM[0m
+
+[0m[38;2;153;153;153m[48;2;55;55;55m❯ [0m[38;2;255;255;255m[48;2;55;55;55mRun this exact shell command with the Bash tool: touch hello.txt[0m[48;2;55;55;55m                [0m
+
+  [0m[38;2;153;153;153mRan [0m[1m[38;2;153;153;153m1[0m[38;2;153;153;153m shell command [0m
+[0m[38;2;153;153;153m  ⎿  Interrupted · What should Claude do instead?[0m
+
+[0m[38;2;153;153;153m✻ Worked for 1s · done 11:58 PM[0m
+                                                              [0m[38;2;153;153;153m◐ medium · /effort[0m
+[0m[38;2;136;136;136m──────────────────────────────────────────────────────────────────────────────────[0m
+❯ hello from steward, a fairly long line of typed text to check how wrapping is
+  handled by the detector when it runs past the edge
+[0m[38;2;136;136;136m──────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[38;2;153;153;153m⏸ manual mode on[0m

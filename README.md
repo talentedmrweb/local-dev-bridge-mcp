@@ -2,7 +2,7 @@
 
 A small MCP server that does the two things nothing else on the Mac does:
 
-1. **Herdr control** — list, read, type into, and wait on [Herdr](https://herdr.dev) agent panes on this Mac.
+1. **Herdr control** — list, read, type into, submit, answer pickers in, and wait on [Herdr](https://herdr.dev) agent panes on this Mac.
 2. **UAT queue** — a file-based work queue where coding sessions author browser tests and browser sessions (Cowork + Claude in Chrome) claim, run, and report them.
 
 It has **no file or shell tools** any more. See [Pairing model](#pairing-model).
@@ -28,7 +28,9 @@ cd local-dev-bridge-mcp
 npm install
 ```
 
-Requires Node ≥ 18 and, for the Herdr tools, Herdr at `/opt/homebrew/bin/herdr` (Homebrew on Apple Silicon). The UAT tools work without Herdr.
+**One-shot (macOS):** `./install-commander.sh` runs `npm install --omit=dev`, then registers `local-dev-bridge` in Claude Desktop (absolute `node` path, backs up `claude_desktop_config.json` first) and in Claude Code (user scope). After that, quit and reopen Claude Desktop.
+
+Requires Node ≥ 18 and, for the Herdr tools, Herdr at `/opt/homebrew/bin/herdr` (Apple Silicon) or `/usr/local/bin/herdr` (Intel). The UAT tools work without Herdr.
 
 ### Configuration
 
@@ -95,7 +97,7 @@ mcp__local-dev-bridge__uat_dashboard
 
 **Herdr tools act on the Mac the server runs on.** If the server is launched over SSH on another machine, `herdr_*` sees *that* machine's panes and the UAT tools see *that* machine's queue.
 
-## Tools (13)
+## Tools (15)
 
 ### Herdr
 
@@ -105,9 +107,11 @@ mcp__local-dev-bridge__uat_dashboard
 | `herdr_agent_read {target, source?, lines?}` | `herdr pane read` | Defaults `--source recent --lines 120`; `lines` 1–2000 |
 | `herdr_agent_send {target, text}` | `herdr pane send-text` | Literal text, **no Enter**. Guarded (below) |
 | `herdr_pane_run {target, command}` | `herdr pane run` | Single-line command **+ Enter**. Guarded (below) |
+| `herdr_pane_submit {target}` | `herdr pane send-keys <t> enter` | Enter only, and **only** to submit text this bridge typed into that pane via `herdr_agent_send` in the last 5 min (below) |
+| `herdr_pane_keys {target, keys}` | `herdr pane send-keys` | Answers a Claude Code **AskUserQuestion** picker. Keys: `Enter` `Esc` `Up` `Down` `Tab` `1`–`9`, max 10. Refuses permission/approval/trust prompts (below) |
 | `herdr_wait {target, status, timeout_ms?}` | `herdr agent wait --until` | `idle\|working\|blocked\|done\|unknown`; default 30 s, max 600 s. Target must be an agent pane. Most MCP clients time a call out at ~60 s — keep `timeout_ms` under that unless your client allows more |
 
-Implementation: The first of `/opt/homebrew/bin/herdr`, `/usr/local/bin/herdr` that exists is spawned with an argv array — **no shell** — and only the five subcommands above are allowed (no `start`, `attach`, `server`, `config`, …). Targets must match `[A-Za-z0-9][A-Za-z0-9_:.-]*`, so they can never be parsed as flags. 30 s default timeout.
+Implementation: The first of `/opt/homebrew/bin/herdr`, `/usr/local/bin/herdr` that exists is spawned with an argv array — **no shell** — and only six subcommands are allowed (`agent list`, `pane read`, `pane send-text`, `pane run`, `agent wait`, `pane send-keys`) (no `start`, `attach`, `server`, `config`, …). Targets must match `[A-Za-z0-9][A-Za-z0-9_:.-]*`, so they can never be parsed as flags. 30 s default timeout.
 
 #### The un-sent-line rule
 
@@ -124,6 +128,11 @@ Detection (`lib/unsent.js`):
 - **Claude Code panes** — the `❯` line inside the input box (between the two horizontal rules). Claude Code draws its own *prompt suggestions* (e.g. `Try "fix typecheck errors"`, or a suggested `ship it`) as **dim** ghost text; those are not operator input and do not block. Anything rendered non-dim does.
 - **Shell panes** — the last non-blank line is a prompt (`user@host … %`/`$`/`#`, or a bare `$ `/`% `/`❯ `) followed by text.
 - Anything else is treated as empty. If refused, ask the operator to send or clear the line; there is no override.
+
+#### Submit and picker guards (`lib/guards.js`)
+
+- **`herdr_pane_submit`**: the server remembers, in memory, the last text it typed into each pane with `herdr_agent_send`. Enter is pressed only if that record is under 5 minutes old **and** the pane's input line holds exactly that text (whitespace and wrapping ignored). Each refusal has its own code: `not_bridge_text` (no record, or the line differs, e.g. the operator typed or edited it), `submit_window_expired`, `nothing_to_submit` (empty line or dim suggestion only), `approval_prompt`. Records are cleared on submit and by `herdr_pane_run`, and are lost on restart (fail closed). So the operator's own un-sent text can never be submitted.
+- **`herdr_pane_keys`**: only the **active prompt block** is judged: the last dialog footer (`Esc to cancel` / `Enter to select|confirm` / `Tab to amend`) plus the 14 non-blank lines above it. Old scrollback doesn't count, so busy panes work. In that block it refuses with `approval_prompt` on the permission footer `Tab to amend`, or on `Do you want to`, `allow`, `permission`, `trust this folder` or `don't ask again` (case-insensitive). It refuses with `no_picker` unless the block carries the AskUserQuestion footer `Enter to select`, so `Enter`/`Esc` can't submit operator text or interrupt a working agent. Any other key: `key_not_allowed`. A picker whose own options mention "allow" is refused too, which is deliberate (fail safe).
 
 ### UAT queue
 
@@ -216,6 +225,7 @@ node test/worker-smoke.mjs      # loopback smoke against the real queue: queue �
 ## Testing
 
 ```bash
+node test/guards.mjs                                                        # submit/picker guards vs captured Claude Code screens (test/fixtures)
 UAT_DIR=~/Projects/uat-queue node test/regression.mjs <scratch-pane-id>   # full UAT + Herdr pass over MCP stdio
 node test/call.mjs uat_dashboard '{}'                                       # one-off tool call
 ```
