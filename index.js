@@ -13,9 +13,9 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { detectUnsent } from './lib/unsent.js';
-import { checkSubmit, checkPickerScreen, mapKeys, KEY_MAP, MAX_KEYS } from './lib/guards.js';
+import { checkSubmit, inputSnapshot, checkPickerScreen, mapKeys, KEY_MAP, MAX_KEYS } from './lib/guards.js';
 
-const VERSION = '3.1.0';
+const VERSION = '3.1.1';
 
 // ──────────────────────────────────────────────
 // Config — UAT_DIR is the only setting.
@@ -736,7 +736,8 @@ async function herdrAgentSend(args) {
   const before = await guardUnsent(target);
   // herdr 0.9.x dropped `agent send`; `pane send-text` is the literal, no-Enter equivalent.
   await herdr(['pane', 'send-text', target, t]);
-  sentByBridge.set(target, { text: t, at: Date.now() });
+  const shown = await settledSnapshot(target);
+  sentByBridge.set(target, { text: t, at: Date.now(), shown });
   return text(`✉️ Sent ${t.length} chars to ${target} (no Enter)${suggestionNote(before)}.`);
 }
 
@@ -745,6 +746,21 @@ async function readScreen(target) {
   const screen = readText(json, raw);
   if (typeof screen !== 'string') fail('herdr_failed', 'Could not read the target pane.', { target });
   return screen;
+}
+
+// Read the input box until two reads 250 ms apart agree (Claude Code renders a
+// long paste as a placeholder a moment after it lands), max ~3 s. Returns the
+// snapshot used by herdr_pane_submit, or null if nothing settled.
+async function settledSnapshot(target) {
+  let prev;
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    let cur;
+    try { cur = inputSnapshot(detectUnsent(await readScreen(target))); } catch { return null; }
+    if (i > 0 && cur === prev) return cur;
+    prev = cur;
+  }
+  return null;
 }
 
 async function herdrPaneSubmit(args) {
@@ -756,7 +772,7 @@ async function herdrPaneSubmit(args) {
   if (!v.ok) fail(v.code, v.reason, { target });
   await herdr(['pane', 'send-keys', target, 'enter']);
   sentByBridge.delete(target);
-  return text(`⏎ Submitted the bridge's own text in ${target}.`);
+  return text(`⏎ Submitted the bridge's own text in ${target}${v.via === 'snapshot' ? ' (matched the post-send snapshot; long text shows collapsed)' : ''}.`);
 }
 
 async function herdrPaneKeys(args) {
