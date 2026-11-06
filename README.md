@@ -195,6 +195,19 @@ uat-queue/
 └── archive/       old results (manual)
 ```
 
+## Liveness canary (v3.2.0, WO-CMD-8)
+
+Every tool call writes a stamp under `~/.local/state/local-dev-bridge/` (mode 600, atomic rename):
+`{"at": ISO time, "epoch": seconds, "tool": "<name>", "pid": n}`. It holds the tool name only, never arguments.
+- `last-call.desktop`: written when Claude Desktop launched this bridge (its parent is `Claude.app/Contents/Helpers/disclaimer`). STEWARD's calls take this path.
+- `last-call.other`: written for any other client, such as Claude Code panes. A busy pane can't keep the Desktop stamp fresh.
+
+`LDB_STATE_DIR` overrides the directory; `LDB_CALLER=desktop|other` overrides the detection. A write failure is swallowed, so the tool call still runs.
+
+The COMMANDER watchdog (`mini-cluster/scripts/commander-watchdog.sh`) alerts when `last-call.desktop` goes stale.
+This catches the 2026-11-05 failure: Desktop reconnected the bridge after a renderer reload but never re-announced
+its tools to the cloud session, so every process looked healthy while STEWARD had no bridge.
+
 ## UAT worker (headless queue consumer)
 
 `worker/uat-worker.mjs` drains the queue without a human-driven session. It is the GHOST consumer (COMMANDER keeps its interactive `~/Projects/uat-worker` session).
