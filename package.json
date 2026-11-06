@@ -1,12 +1,12 @@
 {
   "name": "local-dev-bridge-mcp",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "MCP server for Herdr agent/pane control and a file-based UAT test queue (Claude Code ↔ Cowork + Claude in Chrome). File/shell work moves to the native device bridge.",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js",
-    "test": "node test/guards.mjs && node test/regression.mjs",
+    "test": "node test/guards.mjs && node test/heartbeat.mjs && node test/regression.mjs",
     "smoke:worker": "node test/worker-smoke.mjs",
     "worker": "node worker/uat-worker.mjs"
   },

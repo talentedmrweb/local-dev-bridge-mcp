@@ -14,8 +14,9 @@ import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { detectUnsent } from './lib/unsent.js';
 import { checkSubmit, checkPickerScreen, mapKeys, KEY_MAP, MAX_KEYS } from './lib/guards.js';
+import { touchLastCall } from './lib/heartbeat.js';
 
-const VERSION = '3.1.0';
+const VERSION = '3.2.0';
 
 // ──────────────────────────────────────────────
 // Config — UAT_DIR is the only setting.
@@ -892,6 +893,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  touchLastCall(name); // WO-CMD-8 canary: any call, known or not, proves the cloud→bridge path is live
   try {
     const handler = HANDLERS[name];
     if (!handler) fail('unknown_tool', `Unknown tool: ${name}`, { available: Object.keys(HANDLERS) });
