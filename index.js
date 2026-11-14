@@ -13,9 +13,10 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { detectUnsent } from './lib/unsent.js';
-import { checkSubmit, checkPickerScreen, mapKeys, KEY_MAP, MAX_KEYS } from './lib/guards.js';
+import { checkSubmit, checkPickerScreen, mapKeys, KEY_MAP, MAX_KEYS, checkAgentText, clearProgress, agentNames } from './lib/guards.js';
+import { recordLedger, readLedger, findSend, textHash } from './lib/ledger.js';
 
-const VERSION = '3.1.0';
+const VERSION = '3.3.0';
 
 // ──────────────────────────────────────────────
 // Config — UAT_DIR is the only setting.
@@ -394,6 +395,7 @@ const TOOLS = [
       properties: {
         target: { type: 'string', description: 'Pane id, terminal id, or agent name' },
         text: { type: 'string', description: 'Literal text to type' },
+        from: { type: 'string', description: 'Sender name for the agent-send ledger (default "bridge")' },
       },
       required: ['target', 'text'],
     },
@@ -406,6 +408,7 @@ const TOOLS = [
       properties: {
         target: { type: 'string', description: 'Pane id (e.g. "wN:p2")' },
         command: { type: 'string', description: 'Single-line command; Enter is pressed after it' },
+        from: { type: 'string', description: 'Sender name for the agent-send ledger (default "bridge")' },
       },
       required: ['target', 'command'],
     },
@@ -431,6 +434,22 @@ const TOOLS = [
         keys: { type: 'array', items: { type: 'string', enum: Object.keys(KEY_MAP) }, minItems: 1, maxItems: MAX_KEYS, description: 'Keys in order, e.g. ["2"] or ["Down","Enter"]' },
       },
       required: ['target', 'keys'],
+    },
+  },
+  {
+    name: 'herdr_pane_clear_agent_text',
+    description:
+      "Clear (Ctrl-U) or submit (Enter) a Claude Code input line that an AGENT typed and left stuck, so a jammed pane can be freed without the operator. " +
+      'Only acts when the text is provably agent-written: a ledger record of a bridge/agent send into this pane with the same text, or a "<Agent> →" / "pN <Role>:" prefix (prefix allows clear only; submit needs the ledger). ' +
+      "Refuses on the operator's own text and on any permission, approval, trust or picker prompt. Returns the full text so nothing is lost. Use dry_run first.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Pane id (e.g. "wH:p2")' },
+        action: { type: 'string', enum: ['clear', 'submit'], description: 'clear (default) or submit' },
+        dry_run: { type: 'boolean', description: 'Check and report only; send no keys' },
+      },
+      required: ['target'],
     },
   },
   {
@@ -737,6 +756,7 @@ async function herdrAgentSend(args) {
   // herdr 0.9.x dropped `agent send`; `pane send-text` is the literal, no-Enter equivalent.
   await herdr(['pane', 'send-text', target, t]);
   sentByBridge.set(target, { text: t, at: Date.now() });
+  await logSend(target, t, 'send', 'herdr_agent_send', args.from);
   return text(`✉️ Sent ${t.length} chars to ${target} (no Enter)${suggestionNote(before)}.`);
 }
 
@@ -776,7 +796,71 @@ async function herdrPaneRun(args) {
   const before = await guardUnsent(target);
   await herdr(['pane', 'run', target, command]);
   sentByBridge.delete(target);
+  await logSend(target, command, 'run', 'herdr_pane_run', args.from);
   return text(`▶️ Ran in ${target}: ${command}${suggestionNote(before)}`);
+}
+
+// Ledger every agent-to-agent send. Also hash what the input line shows right after a no-Enter send,
+// because Claude Code may re-render long text (e.g. "[Pasted text #1]"), and that is what a later
+// clear will see. A run normally leaves the line empty; if the Enter was swallowed, its text is kept too.
+async function logSend(target, t, kind, via, from) {
+  let shown = null;
+  try {
+    const d = detectUnsent(await readScreen(target));
+    if (d.state === 'unsent') shown = textHash(d.text);
+  } catch {
+    /* screen unreadable: the plain text hash still goes in */
+  }
+  recordLedger({ target, text: t, kind, via, from: typeof from === 'string' ? from : 'bridge', hashes: [shown] });
+}
+
+const CLEAR_MAX_PRESSES = 40;
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function herdrPaneClearAgentText(args) {
+  const target = assertTarget(args.target);
+  const action = assertEnum(args.action, 'action', ['clear', 'submit']) || 'clear';
+  const dryRun = args.dry_run === true;
+  const entries = readLedger();
+  const ledgerMatch = (hash) => findSend(entries, target, hash);
+  const screen = await readScreen(target);
+  const v = checkAgentText(screen, { action, target, ledgerMatch, names: agentNames() });
+  if (!v.ok) fail(v.code, v.reason, { target, ...(v.prefix && { prefix: v.prefix }) });
+  const original = v.detected.text;
+  const prov = v.provenance.via === 'ledger'
+    ? `ledger (${v.provenance.kind} by ${v.provenance.from ?? 'unknown'} at ${v.provenance.at})`
+    : `agent prefix "${v.provenance.prefix}"`;
+  const report = `Text (${original.length} chars, sha256 ${v.hash.slice(0, 12)}):\n${original}`;
+  if (dryRun) return text(`🧪 Dry run: would ${action === 'clear' ? 'clear (Ctrl-U)' : 'submit (Enter)'} the agent text in ${target}. Provenance: ${prov}.\n${report}`);
+
+  if (action === 'submit') {
+    await herdr(['pane', 'send-keys', target, 'enter']);
+    recordLedger({ target, text: original, kind: 'submit', via: 'herdr_pane_clear_agent_text', from: v.provenance.via });
+    sentByBridge.delete(target);
+    return text(`⏎ Submitted the agent text in ${target}. Provenance: ${prov}.\n${report}`);
+  }
+
+  // Claude Code's Ctrl-U deletes one wrapped screen line, so repeat it, re-reading after each press
+  // and stopping the moment the line holds anything that isn't what is left of the agent's text.
+  let before = original;
+  let presses = 0;
+  for (; presses < CLEAR_MAX_PRESSES; presses++) {
+    await herdr(['pane', 'send-keys', target, 'ctrl+u']);
+    await pause(250);
+    const now = await readScreen(target);
+    const dialog = checkPickerScreen(now);
+    if (dialog.code === 'approval_prompt' || dialog.ok) fail('prompt_showing', `Stopped after ${presses + 1} Ctrl-U: a prompt appeared in ${target}.`, { target });
+    const after = detectUnsent(now);
+    const p = clearProgress(original, before, after);
+    if (p.done) {
+      recordLedger({ target, text: original, kind: 'clear', via: 'herdr_pane_clear_agent_text', from: v.provenance.via });
+      sentByBridge.delete(target);
+      return text(`🧹 Cleared the agent text in ${target} (${presses + 1} Ctrl-U). Provenance: ${prov}. Input line is now ${after.state}.\n${report}`);
+    }
+    if (!p.ok) fail(p.code, `${p.reason} (${presses + 1} Ctrl-U sent)`, { target, remaining: after.text });
+    before = after.text;
+  }
+  fail('clear_incomplete', `Input line still not empty after ${CLEAR_MAX_PRESSES} Ctrl-U.`, { target });
 }
 
 async function herdrWait(args) {
@@ -884,6 +968,7 @@ const HANDLERS = {
   herdr_wait: herdrWait,
   herdr_pane_submit: herdrPaneSubmit,
   herdr_pane_keys: herdrPaneKeys,
+  herdr_pane_clear_agent_text: herdrPaneClearAgentText,
 };
 
 const server = new Server({ name: 'local-dev-bridge-mcp', version: VERSION }, { capabilities: { tools: {} } });
