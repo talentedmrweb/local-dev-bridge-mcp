@@ -97,7 +97,7 @@ mcp__local-dev-bridge__uat_dashboard
 
 **Herdr tools act on the Mac the server runs on.** If the server is launched over SSH on another machine, `herdr_*` sees *that* machine's panes and the UAT tools see *that* machine's queue.
 
-## Tools (15)
+## Tools (16)
 
 ### Herdr
 
@@ -105,10 +105,11 @@ mcp__local-dev-bridge__uat_dashboard
 |---|---|---|
 | `herdr_agent_list` | `herdr agent list` | Pane id, status, agent, title, cwd |
 | `herdr_agent_read {target, source?, lines?}` | `herdr pane read` | Defaults `--source recent --lines 120`; `lines` 1–2000 |
-| `herdr_agent_send {target, text}` | `herdr pane send-text` | Literal text, **no Enter**. Guarded (below) |
-| `herdr_pane_run {target, command}` | `herdr pane run` | Single-line command **+ Enter**. Guarded (below) |
+| `herdr_agent_send {target, text, from?}` | `herdr pane send-text` | Literal text, **no Enter**. Guarded (below) |
+| `herdr_pane_run {target, command, from?}` | `herdr pane run` | Single-line command **+ Enter**. Guarded (below) |
 | `herdr_pane_submit {target}` | `herdr pane send-keys <t> enter` | Enter only, and **only** to submit text this bridge typed into that pane via `herdr_agent_send` in the last 5 min (below) |
 | `herdr_pane_keys {target, keys}` | `herdr pane send-keys` | Answers a Claude Code **AskUserQuestion** picker. Keys: `Enter` `Esc` `Up` `Down` `Tab` `1`–`9`, max 10. Refuses permission/approval/trust prompts (below) |
+| `herdr_pane_clear_agent_text {target, action?, dry_run?}` | `herdr pane send-keys <t> ctrl+u` (repeated) or `enter` | Frees a pane jammed by an **agent's** stuck input line. `clear` (default) or `submit`. Only on provably agent-written text; refuses the operator's own text and every prompt (below) |
 | `herdr_wait {target, status, timeout_ms?}` | `herdr agent wait --until` | `idle\|working\|blocked\|done\|unknown`; default 30 s, max 600 s. Target must be an agent pane. Most MCP clients time a call out at ~60 s — keep `timeout_ms` under that unless your client allows more |
 
 Implementation: The first of `/opt/homebrew/bin/herdr`, `/usr/local/bin/herdr` that exists is spawned with an argv array — **no shell** — and only six subcommands are allowed (`agent list`, `pane read`, `pane send-text`, `pane run`, `agent wait`, `pane send-keys`) (no `start`, `attach`, `server`, `config`, …). Targets must match `[A-Za-z0-9][A-Za-z0-9_:.-]*`, so they can never be parsed as flags. 30 s default timeout.
@@ -133,6 +134,28 @@ Detection (`lib/unsent.js`):
 
 - **`herdr_pane_submit`**: the server remembers, in memory, the last text it typed into each pane with `herdr_agent_send`. Enter is pressed only if that record is under 5 minutes old **and** the pane's input line holds exactly that text (whitespace and wrapping ignored). Each refusal has its own code: `not_bridge_text` (no record, or the line differs, e.g. the operator typed or edited it), `submit_window_expired`, `nothing_to_submit` (empty line or dim suggestion only), `approval_prompt`. Records are cleared on submit and by `herdr_pane_run`, and are lost on restart (fail closed). So the operator's own un-sent text can never be submitted.
 - **`herdr_pane_keys`**: only the **active prompt block** is judged: the last dialog footer (`Esc to cancel` / `Enter to select|confirm` / `Tab to amend`) plus the 14 non-blank lines above it. Old scrollback doesn't count, so busy panes work. In that block it refuses with `approval_prompt` on the permission footer `Tab to amend`, or on `Do you want to`, `allow`, `permission`, `trust this folder` or `don't ask again` (case-insensitive). It refuses with `no_picker` unless the block carries the AskUserQuestion footer `Enter to select`, so `Enter`/`Esc` can't submit operator text or interrupt a working agent. Any other key: `key_not_allowed`. A picker whose own options mention "allow" is refused too, which is deliberate (fail safe).
+
+#### Clearing an agent's stuck line (v3.3.0)
+
+`herdr_agent_send` and `herdr_pane_submit` won't touch text they didn't type, so a pane can stay jammed for days when another agent's message sits un-sent in it. `herdr_pane_clear_agent_text` frees it **without the operator**, but only when the text is provably agent-written:
+
+| Provenance | clear (Ctrl-U) | submit (Enter) |
+|---|---|---|
+| **Ledger**: a bridge (`herdr_agent_send`/`herdr_pane_run`) or `bin/agent-send.mjs` send into **this pane** with the same text hash (whitespace ignored), within 14 days | ✅ | ✅ |
+| **Prefix**: the line starts with `pN <Role>:` (e.g. `p5 Benchmark/Data:`) or `<Agent> →` / `<Agent> ->` for a known agent name (`LDB_AGENT_NAMES` overrides the list) | ✅ | ❌ `submit_needs_ledger`: the operator may have added words, and Enter would send them on |
+| Neither: treated as the **operator's own text** | ❌ `not_agent_text` | ❌ |
+
+- Refused on any dialog: `approval_prompt` (permission, approval or trust prompt) or `prompt_showing` (picker). Also refused with `not_claude_pane` and `nothing_to_clear`.
+- Claude Code's Ctrl-U deletes one wrapped screen line, so `clear` presses it repeatedly, re-reading after each press. It stops with `clear_diverged` if the line ever holds anything other than what's left of the agent's text (someone typed), `clear_stalled` on no progress, or `prompt_showing` if a dialog pops up. The cap is 40 presses.
+- The result always carries the **full text**, so nothing is lost. Run `dry_run: true` first.
+
+**Agent-send ledger** (`lib/ledger.js`): `$LDB_STATE_DIR/agent-sends.jsonl` (default `~/.local/state/local-dev-bridge`, mode 600). Each entry holds time, pane, kind (`send` / `run` / `clear` / `submit`), via, `from`, length and sha256 hashes: one of the text, plus one of what the input line showed right after the send (Claude Code may re-render long text). **The text itself is never stored.** Ledger write failures are logged, never thrown (fail closed: no record means no clear by ledger). Pane agents log their own sends with:
+
+```bash
+node ~/Projects/local-dev-bridge-mcp/bin/agent-send.mjs --from "p5 Benchmark/Data" [--no-enter] <pane> <text…>
+```
+
+It refuses (exit 3) if the target already holds un-sent text.
 
 ### UAT queue
 
@@ -226,6 +249,7 @@ node test/worker-smoke.mjs      # loopback smoke against the real queue: queue �
 
 ```bash
 node test/guards.mjs                                                        # submit/picker guards vs captured Claude Code screens (test/fixtures)
+node test/clear-agent-text.mjs                                              # clear-agent-text guards + agent-send ledger (v3.3.0)
 UAT_DIR=~/Projects/uat-queue node test/regression.mjs <scratch-pane-id>   # full UAT + Herdr pass over MCP stdio
 node test/call.mjs uat_dashboard '{}'                                       # one-off tool call
 ```
