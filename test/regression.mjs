@@ -51,11 +51,11 @@ const { tools } = await a.listTools();
 const names = tools.map((t) => t.name).sort();
 console.log('tools/list:', names.join(', '));
 const want = [
-  'herdr_agent_list', 'herdr_agent_read', 'herdr_agent_send', 'herdr_pane_keys', 'herdr_pane_run', 'herdr_pane_submit', 'herdr_wait',
+  'herdr_agent_list', 'herdr_agent_read', 'herdr_agent_send', 'herdr_pane_clear_agent_text', 'herdr_pane_keys', 'herdr_pane_run', 'herdr_pane_submit', 'herdr_wait',
   'uat_claim_test', 'uat_complete_test', 'uat_dashboard', 'uat_get_pending', 'uat_get_results',
   'uat_get_test', 'uat_queue_test', 'uat_reset_test',
 ].sort();
-check('tools/list = exactly 8 uat_* + 7 herdr_*', JSON.stringify(names) === JSON.stringify(want), `${names.length} tools`);
+check('tools/list = exactly 8 uat_* + 8 herdr_*', JSON.stringify(names) === JSON.stringify(want), `${names.length} tools`);
 check('no file/shell tools', !names.some((n) => ['read_file', 'write_file', 'edit_file', 'list_directory', 'search_files', 'run_command'].includes(n)));
 
 // ── UAT happy path ──
