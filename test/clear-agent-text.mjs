@@ -6,7 +6,8 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { detectUnsent } from '../lib/unsent.js';
-import { checkAgentText, clearProgress, agentPrefix, agentNames, DEFAULT_AGENT_NAMES, checkSubmit } from '../lib/guards.js';
+import { checkAgentText, clearProgress, clearProgressSent, visibleIsTailOf, agentPrefix, agentNames, DEFAULT_AGENT_NAMES, checkSubmit, inputSnapshot } from '../lib/guards.js';
+import { RULE_RE } from '../lib/unsent.js';
 import { recordLedger, readLedger, findSend, textHash, ledgerPath, LEDGER_MAX_AGE_MS } from '../lib/ledger.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -104,6 +105,66 @@ fs.rmSync(dir, { recursive: true, force: true });
 // ── existing submit guard unchanged ──
 const s = checkSubmit(detectUnsent(fx('agent-note')), null);
 check('herdr_pane_submit still refuses prefix-only agent text (unchanged)', s.code === 'not_bridge_text');
+
+// ── v3.3.1: wrapped / long sends (real Claude Code 2.1.325 captures, scratch panes) ──
+{
+  // The exact texts the e2e sent (test/fixtures/claude-wrap-*.ansi).
+  const filler = (n, tag) => { let s = ''; let i = 0; while (s.length < n) s += `step ${tag}${i++}: check the scratch fixture and note the result. `; return s.slice(0, n).trim(); };
+  const WO = (who, n, tag) => `STEWARD → ${who}: ${filler(n - 40, tag)} Test only, reply OK.`;
+  // Operator types after the agent's text: edit the LAST "reply OK." (the input box), not scrollback.
+  const appendOp = (scr) => { const i = scr.lastIndexOf('reply OK.'); return scr.slice(0, i) + 'reply OK. and also ship it' + scr.slice(i + 9); };
+  const ledgerOf = (hashes, target = T) => (h) => (hashes.includes(h) ? { at: 'x', from: 'STEWARD', kind: 'send', target } : null);
+  const cases = [
+    ['one', WO('QA', 100, 'one'), '1-line'],
+    ['thr', WO('QA', 330, 'thr'), '3-line, labeled rule'],
+    ['sco', WO('Scout', 370, 'sco'), '4-line, labeled rule (wH:p3 repro)'],
+    ['fiv', WO('QA', 560, 'fiv'), '5-line'],
+  ];
+  for (const [n, sent, label] of cases) {
+    const scr = fx(`wrap-${n}`);
+    const d = detectUnsent(scr);
+    check(`wrap ${label}: detected as unsent Claude input`, d.kind === 'claude' && d.state === 'unsent', `${d.kind}/${d.state}`);
+    check(`wrap ${label}: unwrapped text hashes equal to the sent text`, textHash(d.text) === textHash(sent));
+    const r = run(scr, 'submit', ledgerOf([textHash(sent)]));
+    check(`wrap ${label}: submit allowed via ledger (full-text hash only)`, r.ok && r.provenance.via === 'ledger', r.reason);
+    check(`wrap ${label}: "STEWARD →" prefix recognised on the wrapped text`, run(scr).provenance?.prefix === 'STEWARD →');
+    const appended = appendOp(scr);
+    check(`wrap ${label}: operator appended → submit REFUSED`, run(appended, 'submit', ledgerOf([textHash(sent)])).code === 'submit_needs_ledger');
+    check(`wrap ${label}: permission prompt → REFUSED even with ledger`, run(fx('perm'), 'submit', ledgerOf([textHash(sent)])).code === 'approval_prompt');
+  }
+
+  // ~1,180 chars (wC:p1 repro): the box shows "[Pasted text #N]" + the last lines; no prefix, no full text.
+  const LONG = WO('TCE-APP', 1180, 'tce');
+  const ld = detectUnsent(fx('wrap-tce'));
+  check('long 1,180: box shows a placeholder + tail, not the full text', ld.state === 'unsent' && /^\[Pasted text #\d+\]/.test(ld.text) && textHash(ld.text) !== textHash(LONG));
+  check('long 1,180: v3.3.0 ledger (full-text hash only) → REFUSED not_agent_text (today\'s failure)', run(fx('wrap-tce'), 'clear', ledgerOf([textHash(LONG)])).code === 'not_agent_text');
+  const snap = inputSnapshot(ld);
+  const withSnap = ledgerOf([textHash(LONG), textHash(snap)]);
+  const ls = run(fx('wrap-tce'), 'submit', withSnap);
+  check('long 1,180: v3.3.1 ledger (+ settled snapshot hash) → submit allowed', ls.ok && ls.provenance.via === 'ledger', ls.reason);
+  check('long 1,180: herdr_pane_submit snapshot record → allowed', checkSubmit(ld, { text: LONG, at: Date.now(), shown: snap }).via === 'snapshot');
+  const lApp = appendOp(fx('wrap-tce'));
+  check('long 1,180: operator appended → submit REFUSED', run(lApp, 'submit', withSnap).code === 'not_agent_text');
+
+  // sent_text: recovers sends logged before v3.3.1 (no snapshot hash), e.g. the stuck wC:p1 order.
+  const old = ledgerOf([textHash(LONG)]);
+  const st = checkAgentText(fx('wrap-tce'), { action: 'submit', target: T, ledgerMatch: old, sentText: LONG });
+  check('sent_text: ledger send + box shows its end → submit allowed via sent_text', st.ok && st.provenance.via === 'sent_text', st.reason);
+  check('sent_text: not a ledger send into this pane → REFUSED', checkAgentText(fx('wrap-tce'), { action: 'clear', target: T, ledgerMatch: noLedger, sentText: LONG }).code === 'sent_text_mismatch');
+  check('sent_text: operator appended → REFUSED', checkAgentText(lApp, { action: 'submit', target: T, ledgerMatch: old, sentText: LONG }).code === 'sent_text_mismatch');
+  const opT = detectUnsent(fx('operator-text')).text;
+  check("sent_text: operator's own text under a ledgered claim → REFUSED", checkAgentText(fx('operator-text'), { action: 'clear', target: T, ledgerMatch: old, sentText: LONG }).code === 'sent_text_mismatch' && !visibleIsTailOf(opT, LONG));
+  check('sent_text: permission prompt → REFUSED approval_prompt', checkAgentText(fx('perm'), { action: 'submit', target: T, ledgerMatch: old, sentText: LONG }).code === 'approval_prompt');
+  check('sent_text: placeholder only (<20 visible chars) → not a tail match', !visibleIsTailOf('[Pasted text #5]', LONG) && !visibleIsTailOf('[Pasted text #5] reply OK.', LONG));
+  check('sent_text clear progress: box scrolls back to earlier lines → continue', clearProgressSent(LONG, 'note the result. Test only, reply OK.', { state: 'unsent', text: 'step tce3: check the scratch fixture' }).ok === true);
+  check('sent_text clear progress: foreign text → STOP clear_diverged', clearProgressSent(LONG, 'x', { state: 'unsent', text: 'hold off, my own words' }).code === 'clear_diverged');
+  check('sent_text clear progress: unchanged → STOP clear_stalled', clearProgressSent(LONG, 'step tce3: check', { state: 'unsent', text: 'step tce3: check' }).code === 'clear_stalled');
+
+  // labeled input-box rule (Claude Code 2.1.32x "── session:name ─")
+  check('rule: plain rule', RULE_RE.test('─'.repeat(40)));
+  check('rule: labeled "── scout:scout ─"', RULE_RE.test('─'.repeat(40) + ' scout:scout ─'));
+  check('rule: a line of prose is not a rule', !RULE_RE.test('──── note: this is a heading with a long sentence after the dashes that keeps going and going ─'));
+}
 
 console.log(`\nclear-agent-text: ${pass} passed, ${failCount} failed`);
 process.exit(failCount ? 1 : 0);

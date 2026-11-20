@@ -12,11 +12,11 @@ import os from 'os';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { existsSync } from 'fs';
-import { detectUnsent } from './lib/unsent.js';
-import { checkSubmit, checkPickerScreen, mapKeys, KEY_MAP, MAX_KEYS, checkAgentText, clearProgress, agentNames } from './lib/guards.js';
+import { detectUnsent, settledInput } from './lib/unsent.js';
+import { checkSubmit, checkPickerScreen, mapKeys, KEY_MAP, MAX_KEYS, checkAgentText, clearProgress, clearProgressSent, agentNames } from './lib/guards.js';
 import { recordLedger, readLedger, findSend, textHash } from './lib/ledger.js';
 
-const VERSION = '3.3.0';
+const VERSION = '3.3.1';
 
 // ──────────────────────────────────────────────
 // Config — UAT_DIR is the only setting.
@@ -448,6 +448,7 @@ const TOOLS = [
         target: { type: 'string', description: 'Pane id (e.g. "wH:p2")' },
         action: { type: 'string', enum: ['clear', 'submit'], description: 'clear (default) or submit' },
         dry_run: { type: 'boolean', description: 'Check and report only; send no keys' },
+        sent_text: { type: 'string', description: 'Optional: the exact text you sent into this pane earlier. Use when a long send shows only its last lines and has no settled ledger snapshot (sends before v3.3.1). Allowed only if its hash is a ledger send into this pane and the input line is its end.' },
       },
       required: ['target'],
     },
@@ -755,8 +756,11 @@ async function herdrAgentSend(args) {
   const before = await guardUnsent(target);
   // herdr 0.9.x dropped `agent send`; `pane send-text` is the literal, no-Enter equivalent.
   await herdr(['pane', 'send-text', target, t]);
-  sentByBridge.set(target, { text: t, at: Date.now() });
-  await logSend(target, t, 'send', 'herdr_agent_send', args.from);
+  // Long or wrapped text renders collapsed (placeholder, or only the box's last lines), so record
+  // what the box showed once the send settled: submit and clear match against that rendering.
+  const shown = await settledInput(() => readScreen(target));
+  sentByBridge.set(target, { text: t, at: Date.now(), shown });
+  logSend(target, t, 'send', 'herdr_agent_send', args.from, shown);
   return text(`✉️ Sent ${t.length} chars to ${target} (no Enter)${suggestionNote(before)}.`);
 }
 
@@ -776,7 +780,7 @@ async function herdrPaneSubmit(args) {
   if (!v.ok) fail(v.code, v.reason, { target });
   await herdr(['pane', 'send-keys', target, 'enter']);
   sentByBridge.delete(target);
-  return text(`⏎ Submitted the bridge's own text in ${target}.`);
+  return text(`⏎ Submitted the bridge's own text in ${target}${v.via === 'snapshot' ? ' (matched the post-send snapshot; long text shows collapsed)' : ''}.`);
 }
 
 async function herdrPaneKeys(args) {
@@ -796,22 +800,17 @@ async function herdrPaneRun(args) {
   const before = await guardUnsent(target);
   await herdr(['pane', 'run', target, command]);
   sentByBridge.delete(target);
-  await logSend(target, command, 'run', 'herdr_pane_run', args.from);
+  logSend(target, command, 'run', 'herdr_pane_run', args.from);
   return text(`▶️ Ran in ${target}: ${command}${suggestionNote(before)}`);
 }
 
 // Ledger every agent-to-agent send. Also hash what the input line shows right after a no-Enter send,
 // because Claude Code may re-render long text (e.g. "[Pasted text #1]"), and that is what a later
 // clear will see. A run normally leaves the line empty; if the Enter was swallowed, its text is kept too.
-async function logSend(target, t, kind, via, from) {
-  let shown = null;
-  try {
-    const d = detectUnsent(await readScreen(target));
-    if (d.state === 'unsent') shown = textHash(d.text);
-  } catch {
-    /* screen unreadable: the plain text hash still goes in */
-  }
-  recordLedger({ target, text: t, kind, via, from: typeof from === 'string' ? from : 'bridge', hashes: [shown] });
+// Ledger entry for an agent send: the full-text hash plus, for no-Enter sends, the hash of how the
+// input box showed the text once it settled (long text shows collapsed or as its last lines only).
+function logSend(target, t, kind, via, from, shown = null) {
+  recordLedger({ target, text: t, kind, via, from: typeof from === 'string' ? from : 'bridge', hashes: shown ? [textHash(shown)] : [] });
 }
 
 const CLEAR_MAX_PRESSES = 40;
@@ -821,14 +820,18 @@ async function herdrPaneClearAgentText(args) {
   const target = assertTarget(args.target);
   const action = assertEnum(args.action, 'action', ['clear', 'submit']) || 'clear';
   const dryRun = args.dry_run === true;
+  if (args.sent_text !== undefined && (typeof args.sent_text !== 'string' || !args.sent_text.trim() || args.sent_text.length > 20000)) {
+    fail('invalid_argument', 'sent_text must be the non-empty text you sent (max 20000 chars).');
+  }
+  const sentText = args.sent_text ?? null;
   const entries = readLedger();
   const ledgerMatch = (hash) => findSend(entries, target, hash);
   const screen = await readScreen(target);
-  const v = checkAgentText(screen, { action, target, ledgerMatch, names: agentNames() });
+  const v = checkAgentText(screen, { action, target, ledgerMatch, names: agentNames(), sentText });
   if (!v.ok) fail(v.code, v.reason, { target, ...(v.prefix && { prefix: v.prefix }) });
   const original = v.detected.text;
-  const prov = v.provenance.via === 'ledger'
-    ? `ledger (${v.provenance.kind} by ${v.provenance.from ?? 'unknown'} at ${v.provenance.at})`
+  const prov = v.provenance.via !== 'prefix'
+    ? `${v.provenance.via === 'sent_text' ? 'sent_text matched a ' : ''}ledger (${v.provenance.kind} by ${v.provenance.from ?? 'unknown'} at ${v.provenance.at})`
     : `agent prefix "${v.provenance.prefix}"`;
   const report = `Text (${original.length} chars, sha256 ${v.hash.slice(0, 12)}):\n${original}`;
   if (dryRun) return text(`🧪 Dry run: would ${action === 'clear' ? 'clear (Ctrl-U)' : 'submit (Enter)'} the agent text in ${target}. Provenance: ${prov}.\n${report}`);
@@ -851,7 +854,7 @@ async function herdrPaneClearAgentText(args) {
     const dialog = checkPickerScreen(now);
     if (dialog.code === 'approval_prompt' || dialog.ok) fail('prompt_showing', `Stopped after ${presses + 1} Ctrl-U: a prompt appeared in ${target}.`, { target });
     const after = detectUnsent(now);
-    const p = clearProgress(original, before, after);
+    const p = v.provenance.via === 'sent_text' ? clearProgressSent(sentText, before, after) : clearProgress(original, before, after);
     if (p.done) {
       recordLedger({ target, text: original, kind: 'clear', via: 'herdr_pane_clear_agent_text', from: v.provenance.via });
       sentByBridge.delete(target);

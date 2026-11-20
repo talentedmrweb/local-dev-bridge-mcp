@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Agent-to-agent send for panes, with a ledger record (v3.3.0).
+// Agent-to-agent send for panes, with a ledger record (v3.3.0; settled-snapshot hash v3.3.1).
 //
 //   node bin/agent-send.mjs --from "p5 Benchmark/Data" <pane> <text...>          # text + Enter (herdr pane run)
 //   node bin/agent-send.mjs --from "p5 Benchmark/Data" --no-enter <pane> <text...> # text only (pane send-text)
@@ -9,7 +9,7 @@
 // with herdr_pane_clear_agent_text.
 import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
-import { detectUnsent } from '../lib/unsent.js';
+import { detectUnsent, settledInput } from '../lib/unsent.js';
 import { recordLedger, textHash } from '../lib/ledger.js';
 
 const HERDR = ['/opt/homebrew/bin/herdr', '/usr/local/bin/herdr'].find((p) => existsSync(p));
@@ -45,12 +45,7 @@ if (before.state === 'unsent') {
   process.exit(3);
 }
 execFileSync(HERDR, enter ? ['pane', 'run', target, text] : ['pane', 'send-text', target, text], { stdio: 'ignore' });
-let shown = null;
-try {
-  const after = detectUnsent(read());
-  if (after.state === 'unsent') shown = textHash(after.text);
-} catch {
-  /* unreadable: the text hash alone is recorded */
-}
-const e = recordLedger({ target, text, kind: enter ? 'run' : 'send', via: 'agent-send.mjs', from, hashes: [shown] });
+// --no-enter: also record how the box shows the text once settled (long text shows collapsed).
+const shown = enter ? null : await settledInput(read);
+const e = recordLedger({ target, text, kind: enter ? 'run' : 'send', via: 'agent-send.mjs', from, hashes: shown ? [textHash(shown)] : [] });
 console.log(`sent ${text.length} chars to ${target}${enter ? ' + Enter' : ''}; ledger ${e ? 'recorded' : 'NOT recorded'}`);

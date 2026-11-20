@@ -132,7 +132,7 @@ Detection (`lib/unsent.js`):
 
 #### Submit and picker guards (`lib/guards.js`)
 
-- **`herdr_pane_submit`**: the server remembers, in memory, the last text it typed into each pane with `herdr_agent_send`. Enter is pressed only if that record is under 5 minutes old **and** the pane's input line holds exactly that text (whitespace and wrapping ignored). Each refusal has its own code: `not_bridge_text` (no record, or the line differs, e.g. the operator typed or edited it), `submit_window_expired`, `nothing_to_submit` (empty line or dim suggestion only), `approval_prompt`. Records are cleared on submit and by `herdr_pane_run`, and are lost on restart (fail closed). So the operator's own un-sent text can never be submitted.
+- **`herdr_pane_submit`**: the server remembers, in memory, the last text it typed into each pane with `herdr_agent_send`. Enter is pressed only if that record is under 5 minutes old **and** the pane's input line holds exactly that text (whitespace and wrapping ignored), **or** it still shows exactly what it showed once the bridge's send settled. Claude Code collapses long input into `[Pasted text #N]` placeholders or a truncated tail, so right after `send-text` the bridge reads the input box until two reads 250 ms apart agree and keeps that snapshot. Any keystroke, edit, clear or expand since then changes the rendering, so the snapshot no longer matches and the submit is refused. Each refusal has its own code: `not_bridge_text` (no record, or the line differs, e.g. the operator typed or edited it), `submit_window_expired`, `nothing_to_submit` (empty line or dim suggestion only), `approval_prompt`. Records are cleared on submit and by `herdr_pane_run`, and are lost on restart (fail closed). So the operator's own un-sent text can never be submitted.
 - **`herdr_pane_keys`**: only the **active prompt block** is judged: the last dialog footer (`Esc to cancel` / `Enter to select|confirm` / `Tab to amend`) plus the 14 non-blank lines above it. Old scrollback doesn't count, so busy panes work. In that block it refuses with `approval_prompt` on the permission footer `Tab to amend`, or on `Do you want to`, `allow`, `permission`, `trust this folder` or `don't ask again` (case-insensitive). It refuses with `no_picker` unless the block carries the AskUserQuestion footer `Enter to select`, so `Enter`/`Esc` can't submit operator text or interrupt a working agent. Any other key: `key_not_allowed`. A picker whose own options mention "allow" is refused too, which is deliberate (fail safe).
 
 #### Clearing an agent's stuck line (v3.3.0)
@@ -141,7 +141,8 @@ Detection (`lib/unsent.js`):
 
 | Provenance | clear (Ctrl-U) | submit (Enter) |
 |---|---|---|
-| **Ledger**: a bridge (`herdr_agent_send`/`herdr_pane_run`) or `bin/agent-send.mjs` send into **this pane** with the same text hash (whitespace ignored), within 14 days | ✅ | ✅ |
+| **Ledger**: a bridge (`herdr_agent_send`/`herdr_pane_run`) or `bin/agent-send.mjs` send into **this pane** whose text hash (whitespace and wrapping ignored), or whose settled-rendering hash (v3.3.1), equals the input line's, within 14 days | ✅ | ✅ |
+| **`sent_text`** (v3.3.1): the caller passes the exact text it sent; its hash is a ledger send into this pane **and** the input line is its end (leading `[Pasted text #N]` placeholders stripped, ≥ 20 chars visible). For long sends logged before v3.3.1 | ✅ | ✅ |
 | **Prefix**: the line starts with `pN <Role>:` (e.g. `p5 Benchmark/Data:`) or `<Agent> →` / `<Agent> ->` for a known agent name (`LDB_AGENT_NAMES` overrides the list) | ✅ | ❌ `submit_needs_ledger`: the operator may have added words, and Enter would send them on |
 | Neither: treated as the **operator's own text** | ❌ `not_agent_text` | ❌ |
 
@@ -149,7 +150,9 @@ Detection (`lib/unsent.js`):
 - Claude Code's Ctrl-U deletes one wrapped screen line, so `clear` presses it repeatedly, re-reading after each press. It stops with `clear_diverged` if the line ever holds anything other than what's left of the agent's text (someone typed), `clear_stalled` on no progress, or `prompt_showing` if a dialog pops up. The cap is 40 presses.
 - The result always carries the **full text**, so nothing is lost. Run `dry_run: true` first.
 
-**Agent-send ledger** (`lib/ledger.js`): `$LDB_STATE_DIR/agent-sends.jsonl` (default `~/.local/state/local-dev-bridge`, mode 600). Each entry holds time, pane, kind (`send` / `run` / `clear` / `submit`), via, `from`, length and sha256 hashes: one of the text, plus one of what the input line showed right after the send (Claude Code may re-render long text). **The text itself is never stored.** Ledger write failures are logged, never thrown (fail closed: no record means no clear by ledger). Pane agents log their own sends with:
+**Long and wrapped sends (v3.3.1).** Claude Code shows a long send as `[Pasted text #N]` plus its last lines, or as only the box's last lines, so the input line rarely equals the full text. After a no-Enter send, `herdr_agent_send` and `agent-send.mjs --no-enter` read the box until two reads 250 ms apart agree (max ~3 s) and also log the hash of that settled rendering, so a later clear or submit matches it. Any keystroke since the send changes the rendering, so nothing typed by the operator matches. The input-box detector also accepts the labeled rule Claude Code 2.1.32x draws above the box for a named session (`──── scout:scout ─`). Before v3.3.1 that rule made the pane read as having no input box at all.
+
+**Agent-send ledger** (`lib/ledger.js`): `$LDB_STATE_DIR/agent-sends.jsonl` (default `~/.local/state/local-dev-bridge`, mode 600). Each entry holds time, pane, kind (`send` / `run` / `clear` / `submit`), via, `from`, length and sha256 hashes: one of the text, plus (no-Enter sends) one of what the input line showed once the send settled. **The text itself is never stored.** Ledger write failures are logged, never thrown (fail closed: no record means no clear by ledger). Pane agents log their own sends with:
 
 ```bash
 node ~/Projects/local-dev-bridge-mcp/bin/agent-send.mjs --from "p5 Benchmark/Data" [--no-enter] <pane> <text…>
@@ -249,7 +252,7 @@ node test/worker-smoke.mjs      # loopback smoke against the real queue: queue �
 
 ```bash
 node test/guards.mjs                                                        # submit/picker guards vs captured Claude Code screens (test/fixtures)
-node test/clear-agent-text.mjs                                              # clear-agent-text guards + agent-send ledger (v3.3.0)
+node test/clear-agent-text.mjs                                              # clear-agent-text guards, ledger, wrapped/long sends (v3.3.1)
 UAT_DIR=~/Projects/uat-queue node test/regression.mjs <scratch-pane-id>   # full UAT + Herdr pass over MCP stdio
 node test/call.mjs uat_dashboard '{}'                                       # one-off tool call
 ```
