@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { detectUnsent } from '../lib/unsent.js';
-import { checkSubmit, checkPickerScreen, mapKeys, SUBMIT_WINDOW_MS } from '../lib/guards.js';
+import { checkSubmit, inputSnapshot, checkPickerScreen, mapKeys, SUBMIT_WINDOW_MS } from '../lib/guards.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fx = (n) => fs.readFileSync(path.join(here, 'fixtures', `claude-${n}.ansi`), 'utf8');
@@ -68,6 +68,26 @@ check('submit: older than 5 min → REFUSED', checkSubmit(typed, { text: typedTe
 check('submit: empty input line → REFUSED', checkSubmit({ state: 'empty' }, { text: typedText, at: now }, now).code === 'nothing_to_submit');
 check('submit: only a dim suggestion → REFUSED', checkSubmit({ state: 'suggestion', text: typedText }, { text: typedText, at: now }, now).code === 'nothing_to_submit');
 check('submit: permission prompt screen has no own text → REFUSED', !checkSubmit(detectUnsent(fx('perm')), { text: typedText, at: now }, now).ok);
+
+// PR #5: long text shows collapsed (real Claude Code 2.1.318 screens).
+{
+  const LONG = Array.from({ length: 600 }, (_, i) => `word${String(i).padStart(4, '0')}`).join(' ');
+  const MED = Array.from({ length: 200 }, (_, i) => `w${String(i).padStart(3, '0')}`).join(' ');
+  const ML = Array.from({ length: 40 }, (_, i) => `line ${i}: some handoff text here for testing the wrap`).join('\n');
+  for (const [name, txt, label] of [['long-tail', LONG, 'truncated tail'], ['long-placeholder', MED, '[Pasted text #N]'], ['long-multiline', ML, 'multiline placeholders']]) {
+    const d = detectUnsent(fx(name));
+    const rec = { text: txt, at: now, shown: inputSnapshot(d) };
+    check(`long (${label}): screen is unsent and != full text`, d.state === 'unsent' && rec.shown && rec.shown !== txt.replace(/\s+/g, ''));
+    check(`long (${label}): unchanged since send → allowed via snapshot`, checkSubmit(d, rec, now).via === 'snapshot');
+    check(`long (${label}): no snapshot recorded → REFUSED`, checkSubmit(d, { text: txt, at: now, shown: null }, now).code === 'not_bridge_text');
+    check(`long (${label}): operator appended text → REFUSED`, checkSubmit({ state: 'unsent', text: d.text + ' and ship it' }, rec, now).code === 'not_bridge_text');
+    check(`long (${label}): older than 5 min → REFUSED`, checkSubmit(d, { ...rec, at: now - SUBMIT_WINDOW_MS - 1 }, now).code === 'submit_window_expired');
+  }
+  const ph = detectUnsent(fx('long-placeholder'));
+  check('long: a different paste ([Pasted text #9]) → REFUSED', checkSubmit({ state: 'unsent', text: '[Pasted text #9]' }, { text: MED, at: now, shown: inputSnapshot(ph) }, now).code === 'not_bridge_text');
+  check('long: input cleared since send → REFUSED', checkSubmit({ state: 'empty' }, { text: MED, at: now, shown: inputSnapshot(ph) }, now).code === 'nothing_to_submit');
+  check('inputSnapshot: empty/suggestion → null', inputSnapshot({ state: 'empty' }) === null && inputSnapshot({ state: 'suggestion', text: 'x' }) === null);
+}
 
 console.log(`\n${pass} passed, ${failCount} failed`);
 process.exit(failCount ? 1 : 0);
